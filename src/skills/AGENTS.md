@@ -8,6 +8,11 @@ registers them per turn.
 
 ## Ownership
 
+- `discordActions.ts` — the bot's Discord participation as tools, backed by per-turn
+  callbacks (`DiscordActions`) supplied by `index.ts`: `reply` (the real chat message —
+  free text is NOT sent), `reply_in_thread`, `start_ban_poll` / `start_delete_poll`
+  (community votes, only enacted by human ✅; registered only when `canModerate`). `react`
+  lives in `react.ts`. This is how the model speaks/acts; silence = calling none of them.
 - `generateImage.ts` — `generate_image`: Grid `/v1/images/generations`, driven by the
   `images/` registry; URL returned via `details.images`.
 - `remixImage.ts` — `remix_image`: img2img on the Horde client (`images/gridImage.ts`);
@@ -21,9 +26,10 @@ registers them per turn.
 - `vision.ts` — `describe_image`: separate `GRID_VISION_MODEL`; SSRF-guarded, MIME-sniffed.
   Registered only when a vision model is configured.
 - `channelStatus.ts` — `set_channel_status` (writes `store/db.ts` channel status).
-- `memorySkills.ts` — `remember` / `recall` over `getMemory()` (hindsight).
-- `react.ts` — `react`: emoji-react via the discord-supplied `onReact` callback; registered
-  only when the turn provides one.
+- `memorySkills.ts` — `remember` / `recall`. `remember` writes **local per-user memory**
+  (`store/db.ts` `userMemory`, keyed to the current speaker — always on, auto-surfaced in
+  context next time) and also hindsight if configured; `recall` searches hindsight.
+- `react.ts` — `react`: emoji-react via the discord-supplied `DiscordActions.react` callback.
 
 ## Local Contracts
 

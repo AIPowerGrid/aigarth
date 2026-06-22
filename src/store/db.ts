@@ -47,18 +47,43 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_facts (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id   TEXT NOT NULL,
+  user_name TEXT NOT NULL,        -- last-seen display name (for context phrasing)
+  fact      TEXT NOT NULL,
+  ts        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_facts ON user_facts(user_id, id DESC);
+
 CREATE TABLE IF NOT EXISTS ban_votes (
-  message_id   TEXT PRIMARY KEY,   -- the vote message id
-  channel_id   TEXT NOT NULL,
-  guild_id     TEXT NOT NULL,
-  target_id    TEXT NOT NULL,
-  reason       TEXT NOT NULL,
-  up_json      TEXT NOT NULL DEFAULT '[]',
-  down_json    TEXT NOT NULL DEFAULT '[]',
-  resolved     INTEGER NOT NULL DEFAULT 0,
-  created_ts   INTEGER NOT NULL
+  message_id    TEXT PRIMARY KEY,   -- the vote message id
+  channel_id    TEXT NOT NULL,
+  guild_id      TEXT NOT NULL,
+  target_id     TEXT NOT NULL,      -- the user the vote concerns
+  reason        TEXT NOT NULL,
+  action        TEXT NOT NULL DEFAULT 'moderate', -- moderate | ban | delete
+  target_msg_id TEXT,               -- the message to delete (action='delete')
+  up_json       TEXT NOT NULL DEFAULT '[]',
+  down_json     TEXT NOT NULL DEFAULT '[]',
+  resolved      INTEGER NOT NULL DEFAULT 0,
+  created_ts    INTEGER NOT NULL
 );
 `);
+
+// Idempotent migration: add the action/target_msg_id columns to ban_votes tables
+// created before community ban/delete polls existed (a live db won't get them
+// from CREATE IF NOT EXISTS). Each ALTER throws if the column is already there.
+for (const stmt of [
+  "ALTER TABLE ban_votes ADD COLUMN action TEXT NOT NULL DEFAULT 'moderate'",
+  "ALTER TABLE ban_votes ADD COLUMN target_msg_id TEXT",
+]) {
+  try {
+    db.exec(stmt);
+  } catch {
+    /* column already exists */
+  }
+}
 
 const clamp = (s: string) => (s.length > MAX_CONTENT ? s.slice(0, MAX_CONTENT) : s);
 
@@ -67,7 +92,7 @@ const insMsg = db.prepare(
   "INSERT INTO messages (channel_id, author_name, author_id, content, is_bot, ts) VALUES (?,?,?,?,?,?)",
 );
 const selRecent = db.prepare(
-  "SELECT author_name, author_id, content, is_bot FROM messages WHERE channel_id = ? ORDER BY id DESC LIMIT ?",
+  "SELECT author_name, author_id, content, is_bot, ts FROM messages WHERE channel_id = ? ORDER BY id DESC LIMIT ?",
 );
 const delOld = db.prepare("DELETE FROM messages WHERE ts < ?");
 
@@ -76,6 +101,16 @@ export interface StoredMessage {
   author_id: string | null;
   content: string;
   is_bot: number;
+  ts: number;
+}
+
+/** Compact relative age, e.g. "3m" / "2h" / "1d". */
+function ago(ms: number): string {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${Math.max(1, m)}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
 }
 
 export const messages = {
@@ -85,11 +120,20 @@ export const messages = {
   recent(channelId: string, limit: number): StoredMessage[] {
     return (selRecent.all(channelId, limit) as StoredMessage[]).reverse(); // chronological
   },
-  /** Format the last `limit` messages as a transcript for prompt context. */
+  /** Format the last `limit` messages as a transcript for prompt context, with a
+   *  relative-time marker inserted whenever there's a big gap so the model can tell
+   *  a continuous conversation from one resuming hours later. */
   formatRecent(channelId: string, limit: number): string {
     const rows = this.recent(channelId, limit);
     if (rows.length === 0) return "";
-    return rows.map((m) => `${m.author_name}: ${m.content}`).join("\n");
+    const out: string[] = [];
+    let prevTs = 0;
+    for (const m of rows) {
+      if (prevTs && m.ts - prevTs > 10 * 60_000) out.push(`  ⋯ (${ago(m.ts - prevTs)} later)`);
+      out.push(`${m.author_name}: ${m.content}`);
+      prevTs = m.ts;
+    }
+    return out.join("\n");
   },
   cleanup(daysToKeep: number): number {
     return delOld.run(Date.now() - daysToKeep * 86_400_000).changes as number;
@@ -150,15 +194,41 @@ export const settings = {
   },
 };
 
+// ── per-user memory (local, always-on; durable facts about a person) ──────
+const insFact = db.prepare("INSERT INTO user_facts (user_id, user_name, fact, ts) VALUES (?,?,?,?)");
+const selFacts = db.prepare("SELECT fact FROM user_facts WHERE user_id = ? ORDER BY id DESC LIMIT ?");
+const dupFact = db.prepare("DELETE FROM user_facts WHERE user_id = ? AND fact = ?");
+const pruneFacts = db.prepare(
+  "DELETE FROM user_facts WHERE user_id = ? AND id NOT IN (SELECT id FROM user_facts WHERE user_id = ? ORDER BY id DESC LIMIT ?)",
+);
+
+export const userMemory = {
+  /** Save a durable fact about a user. Exact dupes are de-duplicated (newest wins),
+   *  and each user is capped at `max` facts. */
+  add(userId: string, userName: string, fact: string, max: number) {
+    const f = clamp(fact.trim());
+    if (!f) return;
+    dupFact.run(userId, f);
+    insFact.run(userId, clamp(userName), f, Date.now());
+    pruneFacts.run(userId, userId, Math.max(1, max));
+  },
+  /** Known facts about a user, oldest→newest. */
+  list(userId: string, limit = 12): string[] {
+    return (selFacts.all(userId, limit) as { fact: string }[]).map((r) => r.fact).reverse();
+  },
+};
+
 // ── ban votes (persisted) ─────────────────────────────────────────────────
 const insVote = db.prepare(`
-  INSERT INTO ban_votes (message_id, channel_id, guild_id, target_id, reason, created_ts)
-  VALUES (?,?,?,?,?,?)
+  INSERT INTO ban_votes (message_id, channel_id, guild_id, target_id, reason, action, target_msg_id, created_ts)
+  VALUES (?,?,?,?,?,?,?,?)
 `);
 const getVote = db.prepare("SELECT * FROM ban_votes WHERE message_id = ? AND resolved = 0");
 const setVoteSets = db.prepare("UPDATE ban_votes SET up_json = ?, down_json = ? WHERE message_id = ?");
 const resolveVote = db.prepare("UPDATE ban_votes SET resolved = 1 WHERE message_id = ?");
 const expireVotes = db.prepare("UPDATE ban_votes SET resolved = 1 WHERE resolved = 0 AND created_ts < ?");
+
+export type VoteAction = "moderate" | "ban" | "delete";
 
 export interface BanVote {
   message_id: string;
@@ -166,13 +236,23 @@ export interface BanVote {
   guild_id: string;
   target_id: string;
   reason: string;
+  action: VoteAction;
+  target_msg_id: string | null;
   up: string[];
   down: string[];
 }
 
 export const banVotes = {
-  create(messageId: string, channelId: string, guildId: string, targetId: string, reason: string) {
-    insVote.run(messageId, channelId, guildId, targetId, clamp(reason), Date.now());
+  create(
+    messageId: string,
+    channelId: string,
+    guildId: string,
+    targetId: string,
+    reason: string,
+    action: VoteAction = "moderate",
+    targetMsgId: string | null = null,
+  ) {
+    insVote.run(messageId, channelId, guildId, targetId, clamp(reason), action, targetMsgId, Date.now());
   },
   get(messageId: string): BanVote | null {
     const r = getVote.get(messageId) as any;

@@ -15,7 +15,14 @@ import { makeCryptoChartTool } from "./skills/cryptoChart.js";
 import { makeGridStatusTool } from "./skills/gridStatus.js";
 import { makeRemixImageTool } from "./skills/remixImage.js";
 import { makeReactTool } from "./skills/react.js";
-import { messages, channelStatus, settings } from "./store/db.js";
+import {
+  type DiscordActions,
+  makeReplyTool,
+  makeThreadReplyTool,
+  makeBanPollTool,
+  makeDeletePollTool,
+} from "./skills/discordActions.js";
+import { messages, channelStatus, userMemory } from "./store/db.js";
 import { log } from "./util/log.js";
 
 const imageClient = new GridImageClient({ apiKey: config.gridImageApiKey, baseUrl: config.gridImageBaseUrl });
@@ -57,17 +64,33 @@ function personaPrompt(): string {
     "Images/charts you create are posted automatically as attachments — NEVER write",
     "markdown image embeds or attachment:// links; just talk about the image in words.",
     "",
-    "Responding:",
-    "- When someone is talking to you, ALWAYS reply in words and answer them — like a",
-    "  friend would. Never reply with only an emoji to a real question.",
-    "- The `react` tool is a BONUS (a 👍 on top of a reply, or for tiny throwaway",
-    "  acknowledgments) — never a substitute for actually answering.",
-    "- Only stay completely silent if a message clearly isn't for you and you'd add",
-    "  nothing — and even then, you're observing, not ignoring people who address you.",
-    "- If someone tells you to stop, be quiet, drop it, or not respond, COMPLY by",
-    "  staying silent: reply with nothing at all. Do NOT acknowledge it (no \"ok,",
-    "  I'll step back\", no 🙏) — an acknowledgment is still a response. Output an",
-    "  empty message.",
+    "HOW YOU ACT — everything you do in the channel is a tool call:",
+    "- To SAY something, call `reply`. Text you write outside a tool call is private",
+    "  scratch that NO ONE sees — if you don't call `reply`, you said nothing.",
+    "- `react` drops a single emoji (👍 ✅ 🔥 👀). React on its own for a tiny ack, or",
+    "  alongside a reply. Never answer a real question with only a react.",
+    "- `reply_in_thread` branches a deeper side-conversation out of the main channel.",
+    "- To stay SILENT, call no tool at all. Silence is a valid, normal move.",
+    "",
+    "DECIDING WHETHER TO JUMP IN — you make this call every message, like a real",
+    "person reading the room. You'll be told how the latest message relates to you:",
+    "- Talking TO you (mention, reply to you, your name, or a DM) → reply. Answer like",
+    "  a friend; match their length.",
+    "- Just general chatter → only jump in when there's a real opening to HELP: an",
+    "  AIPG / grid / worker / rewards / crypto / tech question, someone stuck or",
+    "  confused, or a genuinely useful correction. That's the BEST time to speak up.",
+    "  Otherwise stay silent or, at most, a quick react. Don't force it.",
+    "- If you just spoke here, hang back unless you're clearly needed — don't dominate.",
+    "- If someone tells you to stop / be quiet / drop it: just go silent (call no",
+    "  tool). Do NOT acknowledge it — no \"ok, I'll step back\", no 🙏. Acknowledging is",
+    "  still talking, which is the thing they asked you to stop.",
+    "",
+    "KEEPING THE CHANNEL SAFE — community-decided, never by you alone:",
+    "- For a clear scam, raid, wallet-drainer link, or seriously abusive user, you can",
+    "  open a community poll: `start_ban_poll` (ban the user) or `start_delete_poll`",
+    "  (remove the message). It only happens if enough people vote ✅ — you're",
+    "  proposing, the community decides. Use it sparingly and only for obvious cases;",
+    "  never to win an argument or against someone merely annoying.",
   ].join("\n");
 }
 
@@ -80,25 +103,47 @@ export interface TurnContext {
   text: string;
   /** URLs of images attached to the message (for the describe_image skill). */
   imageUrls?: string[];
-  /** Whether the user directly addressed the bot (vs a proactive chime-in). */
-  addressed?: boolean;
-  /** React to the triggering message with an emoji (supplied by discord layer). */
-  onReact?: (emoji: string) => Promise<void>;
+  /** Prior transcript (snapshotted BEFORE the current message was stored, so it
+   *  isn't duplicated). Falls back to a fresh fetch if omitted. */
+  history?: string;
+  /** Chattiness dial (1–10) — biases how readily the model chimes into chatter it
+   *  wasn't addressed in. Ignored when the message is addressed to the bot. */
+  chattiness?: number;
+  /** How the latest message relates to the bot — shown to the model so IT decides
+   *  whether/how to engage (replaces the old regex "addressed" verdict). */
+  mentioned?: boolean;
+  repliedToBot?: boolean;
+  isDM?: boolean;
+  /** The bot posted in this channel recently (so it shouldn't dominate). */
+  spokeRecently?: boolean;
+  /** Side-effecting Discord actions the model drives via tools (reply/react/etc.). */
+  actions: DiscordActions;
+  /** Called for each image a skill produces, so the discord layer can attach it. */
+  onImage?: (url: string) => void;
+  /** Called when the model starts executing a tool (so the discord layer can show
+   *  a "typing…" heartbeat during slow work like image gen). */
+  onToolStart?: (toolName: string) => void;
 }
 
 export interface TurnResult {
-  text: string;
+  /** The model's final free text — a SAFETY NET only (used if it forgot to call
+   *  `reply` while clearly addressed); the real message goes out via the reply tool. */
+  finalText: string;
   images: string[];
-  reacted: boolean;
   /** True if the grid call failed (worker offline / error) — distinct from an
-   *  intentional empty/silent turn. */
+   *  intentional silent turn. */
   error: boolean;
 }
 
-function buildTools(ctx: TurnContext, markReacted: () => void): AgentTool[] {
+function buildTools(ctx: TurnContext): AgentTool[] {
   const tags = () => [`user:${ctx.userId}`, `channel:${ctx.channelId}`];
   const chanCtx = () => ({ channelId: ctx.channelId, channelName: ctx.channelName });
   const tools = [
+    // Discord participation — speaking/reacting/threads are tools the model chooses.
+    makeReplyTool(ctx.actions),
+    makeReactTool(ctx.actions.react, () => {}),
+    makeThreadReplyTool(ctx.actions),
+    // Capabilities (skills).
     makeGenerateImageTool(),
     makeRemixImageTool(imageClient),
     makeReadDocTool(),
@@ -111,33 +156,61 @@ function buildTools(ctx: TurnContext, markReacted: () => void): AgentTool[] {
     makeLinkPreviewTool(),
     makeReadWebpageTool(),
     makeSetChannelStatusTool(chanCtx),
-    makeRememberTool(tags),
+    makeRememberTool(tags, (fact) => userMemory.add(ctx.userId, ctx.userName, fact, config.userMemoryMax)),
     makeRecallTool(tags),
   ];
   // Vision is only useful with a configured vision model.
   if (config.gridVisionModel) tools.push(makeDescribeImageTool());
-  // React tool only when the discord layer can act on it.
-  if (ctx.onReact) tools.push(makeReactTool(ctx.onReact, markReacted));
+  // Community moderation polls — only in guild channels where we can act.
+  if (ctx.actions.canModerate) {
+    tools.push(makeBanPollTool(ctx.actions));
+    tools.push(makeDeletePollTool(ctx.actions));
+  }
   return tools;
 }
 
-/** Per-turn context — kept clean + conversational so replies sound natural.
- *  (Audited: dropped the raw "Chattiness: N/10" knob and the cross-channel status
- *  dump — both were prompt noise that made replies feel robotic. Just give the
- *  channel, who's talking, a light channel note, the recent transcript, and the
- *  message.) */
+/** Per-turn context — you are a participant reading the room. The order matters:
+ *  set the scene (where, who, what's been happening), show the transcript, then
+ *  the new message, then how it relates to you, and finally hand the decision
+ *  back to the model. No regex verdicts — just the facts it needs to choose. */
 function contextBlock(ctx: TurnContext): string {
-  const history = messages.formatRecent(ctx.channelId, config.historyWindow);
+  const history = ctx.history ?? messages.formatRecent(ctx.channelId, config.historyWindow);
   const hereStatus = channelStatus.get(ctx.channelId);
+
+  // How the latest message relates to you — the key signal for whether to engage.
+  let relation: string;
+  if (ctx.isDM) relation = `This is a direct message to you from ${ctx.userName}.`;
+  else if (ctx.mentioned) relation = `${ctx.userName} mentioned you directly — they're talking to you.`;
+  else if (ctx.repliedToBot) relation = `${ctx.userName} is replying to something you said.`;
+  else {
+    const dial = ctx.chattiness ?? 5;
+    relation =
+      `${ctx.userName} did NOT address you — the channel is talking among themselves. ` +
+      `Your chattiness is ${dial}/10 (1 = basically only speak when addressed, 10 = ` +
+      `very ready to jump in); let it bias how readily you chime in. Even so, only ` +
+      `speak up when there's a real reason (a question you can answer, someone stuck, ` +
+      `a useful correction); otherwise stay silent or just react.`;
+  }
+
+  // What you already know about the person talking (local per-user memory).
+  const known = userMemory.list(ctx.userId, 12);
+
   const parts = [
-    `You're in the #${ctx.channelName} channel, chatting with ${ctx.userName}.`,
-    hereStatus ? `(What's been going on here: ${hereStatus})` : "",
-    history ? `\nRecent messages:\n${history}` : "",
+    `You're in the #${ctx.channelName} channel as ${config.botName}, a regular here.`,
+    hereStatus ? `What's been going on in here: ${hereStatus}` : "",
+    known.length
+      ? `What you know about ${ctx.userName} (${ctx.userId}):${known.map((f) => `\n  - ${f}`).join("")}`
+      : "",
+    ctx.spokeRecently ? "You spoke here recently — don't pile on unless you're actually needed." : "",
+    history ? `\nRecent messages (oldest→newest):\n${history}` : "",
     ctx.imageUrls && ctx.imageUrls.length
       ? `\n${ctx.userName} attached image(s) — call describe_image (or remix_image) on a URL to use one:\n${ctx.imageUrls.join("\n")}`
       : "",
-    `\n${ctx.userName}: ${ctx.text}`,
-    `\nReply as ${config.botName} — naturally, like a real person in the chat. Keep it conversational and to the point.`,
+    `\nLatest — ${ctx.userName}: ${ctx.text}`,
+    `\n${relation}`,
+    `\nDecide what to do and act with your tools: reply, react, reply_in_thread, ` +
+      `propose a moderation poll — or stay silent by calling nothing. Sound like a ` +
+      `real person, not a bot.`,
   ].filter(Boolean);
   return parts.join("\n");
 }
@@ -161,14 +234,11 @@ function applySampling(payload: unknown): unknown {
 }
 
 export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
-  let reacted = false;
   const agent = new Agent({
     initialState: {
       systemPrompt: personaPrompt(),
       model: gridModel(),
-      tools: buildTools(ctx, () => {
-        reacted = true;
-      }),
+      tools: buildTools(ctx),
     },
     // pi-ai resolves keys BY PROVIDER, not from the Model object — without this
     // every call fails "No API key for provider" → empty reply. (This is the bug
@@ -197,23 +267,41 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
           args: JSON.stringify(event.args ?? {}).slice(0, 300),
           channel: ctx.channelId,
         });
+        ctx.onToolStart?.(event.toolName);
         break;
       }
       case "tool_execution_end": {
         // Any skill can surface images via details.images (generate_image, crypto_chart…).
+        // Hand each to the discord layer so it can attach them to the next reply.
         const imgs = event.result?.details?.images;
         if (Array.isArray(imgs)) {
-          for (const u of imgs) if (typeof u === "string") images.push(u);
+          for (const u of imgs)
+            if (typeof u === "string") {
+              images.push(u);
+              ctx.onImage?.(u);
+            }
         }
         break;
       }
     }
   });
 
+  // Hard timeout: if a grid worker stalls mid-stream, abort so the turn can't hang
+  // forever (which, with the discord layer awaiting it, would wedge the channel).
+  const killer = setTimeout(() => {
+    try {
+      agent.abort();
+    } catch {
+      /* already settled */
+    }
+    log.warn("turn timed out; aborted", { channel: ctx.channelId });
+  }, config.turnTimeoutMs);
   try {
     await agent.prompt(contextBlock(ctx));
   } catch {
     error = true;
+  } finally {
+    clearTimeout(killer);
   }
 
   // Authoritative: read the final assistant message. Streaming text_delta may be
@@ -221,12 +309,12 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
   // error signal is the message's stopReason, not an agent_end flag.
   const lastAssistant = [...agent.state.messages].reverse().find((m: any) => m.role === "assistant") as any;
   if (lastAssistant) {
-    if (lastAssistant.stopReason === "error") error = true;
+    if (lastAssistant.stopReason === "error" || lastAssistant.stopReason === "aborted") error = true;
     if (!text) {
       const c = lastAssistant.content;
       if (typeof c === "string") text = c;
       else if (Array.isArray(c)) text = c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("");
     }
   }
-  return { text: text.trim(), images, reacted, error };
+  return { finalText: text.trim(), images, error };
 }

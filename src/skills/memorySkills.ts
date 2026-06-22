@@ -10,23 +10,30 @@ import { getMemory } from "../memory.js";
  * we never blow the context window dumping everything. Per-turn tags (user,
  * channel) are injected so memories can be scoped.
  */
-export function makeRememberTool(getTags: () => string[]): AgentTool {
+/**
+ * @param saveUserFact local per-user memory writer (always available, keyed to the
+ *   person currently being talked to) — runs in addition to hindsight if configured.
+ */
+export function makeRememberTool(getTags: () => string[], saveUserFact: (fact: string) => void): AgentTool {
   return {
     name: "remember",
     label: "Remember",
     description:
-      "Store a durable fact worth remembering long-term (a user preference, a " +
-      "decision, a community fact). Don't store trivia or whole conversations.",
+      "Store a durable fact worth remembering long-term about the person you're " +
+      "talking to (their name/handle, preferences, what they're working on, their " +
+      "node/worker setup, past decisions). Don't store trivia or whole conversations. " +
+      "You'll automatically see what you know about someone next time they talk.",
     parameters: Type.Object({
-      fact: Type.String({ description: "The fact to remember, stated plainly." }),
+      fact: Type.String({ description: "The fact to remember, stated plainly (e.g. 'runs two GPU workers on the image grid')." }),
       about: Type.Optional(Type.String({ description: "Optional subject/context for the fact." })),
     }),
     execute: async (_id, params: any) => {
+      const fact = String(params.fact ?? "").trim();
+      if (!fact) return { content: [{ type: "text", text: "(nothing to remember)" }], details: {} };
+      // Local per-user memory always works; hindsight is an additional semantic layer.
+      saveUserFact(fact);
       const mem = await getMemory();
-      if (!mem.enabled) {
-        return { content: [{ type: "text", text: "(memory not configured)" }], details: {} };
-      }
-      await mem.remember(String(params.fact), { tags: getTags(), context: params.about });
+      if (mem.enabled) await mem.remember(fact, { tags: getTags(), context: params.about });
       return { content: [{ type: "text", text: "noted" }], details: {} };
     },
   };

@@ -1,34 +1,36 @@
-# src/discord — deterministic ingestion (off the LLM path)
+# src/discord — mechanical backstops + moderation (off the LLM path)
 
 ## Purpose
 
-Everything that decides whether and how to engage BEFORE (and cheaper than) a full agent
-run: response gating, the proactive chime-in gate, scam moderation, and `!` commands.
+The non-AI parts of ingestion: mechanical cost/abuse limits, the deterministic scam screen,
+the community-vote moderation engine, and `!` commands. The *decision* of whether/how to
+engage is NOT here — it's the agent's (see `../agent.ts`); this layer only provides safety
+limits plus the machinery the agent's moderation tools and the scam screen both drive.
 
 ## Ownership
 
-- `gating.ts` — `decideEngagement` → `addressed` | `candidate` | `skip`; addressed detection
-  (mention/name/reply-to-bot/DM + recent-bot-spoke continuity), dismissal regex (stay silent
-  on "shut up"/"not you"), per-user cooldown, per-channel proactive cooldown, and the rolling
-  per-minute reply ceiling (`recordBotSend`/`canSend`). All in-memory maps.
-- `proactiveGate.ts` — `decideProactive`: a cheap fast-model Grid call for `candidate`
-  messages → `respond` | `react <emoji>` | `ignore`. **Fails closed (ignore)** on any error
-  or 8s timeout. Parses the verdict from `content`, falling back to `reasoning_content`.
+- `gating.ts` — mechanical backstops ONLY, no content reads: `isCommand`, per-user
+  `passCooldown`, rolling per-minute reply ceiling (`recordBotSend`/`canSend`), and
+  `botSpokeRecently` (a context signal the model is shown). All in-memory maps. (The old
+  `decideEngagement`/`isAddressed`/`isDismissal` regex is gone — the model decides.)
 - `scam.ts` — deterministic, **fail-closed** scam screen (`screenMessage`): foreign Discord
-  invites, or wallet-drainer phrasing + an untrusted link. Trust is by registered host
-  (real URL parse, never substring). `openBanVote` / `handleVoteReaction` / `enforce`:
-  persisted human-only vote, reversible timeout by default (`SCAM_OUTCOME`); bot never self-votes.
+  invites, or wallet-drainer phrasing + an untrusted link. Trust by registered host (real
+  URL parse, never substring). **Community-vote engine** `openModerationVote` (+ `openBanVote`
+  wrapper for the scam path) / `handleVoteReaction` / `enforce`: persisted human-only vote on
+  `action` = `moderate` | `ban` | `delete`; `ban`→ban, `delete`→remove the message,
+  `moderate`→`SCAM_OUTCOME` (reversible timeout default). `BAN_VOTE_THRESHOLD` ✅ enact; bot
+  never self-votes. Backs BOTH the scam screen and the agent's poll tools.
 - `commands.ts` — `handleCommand`: `!help` (all), admin `!chattiness` / `!remember` /
   `!upload` / `!list` / `!delete`. Doc commands operate on `docs/store.ts`.
 
 ## Local Contracts
 
-- This layer is deterministic and must not invoke the full agent. Only `proactiveGate.ts`
-  may call the Grid, and only the cheap `gridGateModel`.
-- Fail-safe defaults: proactive gate and scam screen both fail closed. Dismissal → silence
-  (no acknowledgment), overriding addressed.
-- Cost/abuse backstops (`userCooldownMs`, `proactiveCooldownMs`, `maxRepliesPerMin`,
-  `selfThrottleMs`) come from `config.ts`; the gate must respect all of them.
+- This layer is deterministic and must not invoke the agent. It reads no message content to
+  decide engagement (only `screenMessage` inspects content, for the fail-closed scam screen).
+- Fail-safe defaults: the scam screen fails closed; all moderation (scam OR agent-proposed)
+  resolves via human vote, never unilaterally — the bot never self-votes.
+- Cost/abuse backstops (`userCooldownMs`, `maxRepliesPerMin`, `selfThrottleMs`) come from
+  `config.ts`; `index.ts` must respect them before running the agent.
 - Scam host trust uses `registeredHost` over parsed hosts (via `util/net.ts`), never substrings.
 
 ## Work Guidance

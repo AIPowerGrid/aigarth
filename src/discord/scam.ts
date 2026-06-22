@@ -1,6 +1,6 @@
 import { type Message, type Client, EmbedBuilder } from "discord.js";
 import { config } from "../config.js";
-import { banVotes } from "../store/db.js";
+import { banVotes, type BanVote, type VoteAction } from "../store/db.js";
 import { extractUrls, hostOf } from "../util/net.js";
 import { log } from "../util/log.js";
 
@@ -82,24 +82,74 @@ function redact(content: string): string {
   return c.length > 400 ? c.slice(0, 400) + "…" : c;
 }
 
-/** Post a ban-vote message and persist it. No bot self-vote. */
-export async function openBanVote(message: Message, reason: string): Promise<void> {
-  if (!message.guild) return;
-  if (!("send" in message.channel)) return;
-  const embed = new EmbedBuilder()
-    .setTitle("⚠️ Possible scam — community vote")
-    .setColor(0xff5555)
-    .setDescription(
-      `Flagged message from <@${message.author.id}>.\n**Why:** ${reason}\n\n` +
-        `**Evidence (redacted):**\n\`\`\`${redact(message.content)}\`\`\`\n` +
-        `React ✅ to ${config.scamOutcome}, ❌ to dismiss. ` +
-        `${config.banVoteThreshold} votes decide.`,
-    );
-  const voteMsg = await message.channel.send({ embeds: [embed] });
+export interface ModerationVote {
+  /** Channel to post the vote in (and, for delete, where the target lives). */
+  channel: any;
+  guildId: string;
+  /** The user the vote concerns. */
+  targetUserId: string;
+  action: VoteAction;
+  reason: string;
+  /** The offending message text, shown redacted as evidence (optional). */
+  evidence?: string;
+  /** The message to delete if the vote passes (action='delete'). */
+  targetMsgId?: string | null;
+}
+
+/**
+ * Open a persisted community vote and seed its ✅/❌ reactions. The bot never
+ * self-votes; `config.banVoteThreshold` human ✅ enact the action, threshold ❌
+ * dismiss it. Used by the deterministic scam screen (action='moderate') AND by
+ * the AI's `start_ban_poll` / `start_delete_poll` tools (action='ban'/'delete')
+ * — the model proposes, the community decides.
+ */
+export async function openModerationVote(v: ModerationVote): Promise<void> {
+  if (!v.channel || !("send" in v.channel)) return;
+  const n = config.banVoteThreshold;
+  const verb =
+    v.action === "delete"
+      ? "delete the message"
+      : v.action === "ban"
+        ? `ban <@${v.targetUserId}>`
+        : `${config.scamOutcome} <@${v.targetUserId}>`;
+  const title =
+    v.action === "delete"
+      ? "🗳️ Delete message — community vote"
+      : v.action === "ban"
+        ? "🗳️ Ban user — community vote"
+        : "⚠️ Possible scam — community vote";
+  const lead =
+    v.action === "delete"
+      ? `Proposed: delete a message from <@${v.targetUserId}>.`
+      : `Proposed action on <@${v.targetUserId}>.`;
+  const desc = [
+    lead,
+    `**Why:** ${v.reason}`,
+    v.evidence ? `\n**Message (redacted):**\n\`\`\`${redact(v.evidence)}\`\`\`` : "",
+    `\nReact ✅ to ${verb}, ❌ to dismiss. ${n} votes decide.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const embed = new EmbedBuilder().setTitle(title).setColor(0xff5555).setDescription(desc);
+  const voteMsg = await v.channel.send({ embeds: [embed] });
   await voteMsg.react("✅").catch(() => {});
   await voteMsg.react("❌").catch(() => {});
-  banVotes.create(voteMsg.id, message.channelId, message.guild.id, message.author.id, reason);
-  log.info("scam vote opened", { target: message.author.id, reason });
+  banVotes.create(voteMsg.id, voteMsg.channelId, v.guildId, v.targetUserId, v.reason, v.action, v.targetMsgId ?? null);
+  log.info("moderation vote opened", { action: v.action, target: v.targetUserId, reason: v.reason });
+}
+
+/** Deterministic scam screen → a reversible community moderation vote. */
+export async function openBanVote(message: Message, reason: string): Promise<void> {
+  if (!message.guild) return;
+  await openModerationVote({
+    channel: message.channel,
+    guildId: message.guild.id,
+    targetUserId: message.author.id,
+    action: "moderate",
+    reason,
+    evidence: message.content,
+    targetMsgId: message.id,
+  });
 }
 
 /**
@@ -128,26 +178,40 @@ export async function handleVoteReaction(
   banVotes.setVotes(messageId, [...up], [...down]);
 
   if (up.size >= config.banVoteThreshold) {
-    await enforce(client, vote.guild_id, vote.target_id, vote.reason);
+    await enforce(client, vote);
     banVotes.resolve(messageId);
   } else if (down.size >= config.dismissVoteThreshold) {
     banVotes.resolve(messageId);
-    log.info("scam vote dismissed", { messageId });
+    log.info("moderation vote dismissed", { messageId });
   }
 }
 
-async function enforce(client: Client, guildId: string, targetId: string, reason: string): Promise<void> {
+/** Carry out a passed vote: delete the message, or ban/timeout the user. */
+async function enforce(client: Client, vote: BanVote): Promise<void> {
   try {
-    const guild = await client.guilds.fetch(guildId);
-    const member = await guild.members.fetch(targetId);
-    if (config.scamOutcome === "ban") {
-      await member.ban({ reason: `community vote: ${reason}` });
-      log.warn("member banned by vote", { targetId, reason });
+    if (vote.action === "delete") {
+      const ch = await client.channels.fetch(vote.channel_id).catch(() => null);
+      if (ch && "messages" in ch && vote.target_msg_id) {
+        const m = await (ch as any).messages.fetch(vote.target_msg_id).catch(() => null);
+        if (m) {
+          await m.delete();
+          log.warn("message deleted by vote", { messageId: vote.target_msg_id, reason: vote.reason });
+        }
+      }
+      return;
+    }
+    const guild = await client.guilds.fetch(vote.guild_id);
+    const member = await guild.members.fetch(vote.target_id);
+    // 'ban' polls always ban; the scam screen ('moderate') honors SCAM_OUTCOME.
+    const ban = vote.action === "ban" || config.scamOutcome === "ban";
+    if (ban) {
+      await member.ban({ reason: `community vote: ${vote.reason}` });
+      log.warn("member banned by vote", { targetId: vote.target_id, reason: vote.reason });
     } else {
-      await member.timeout(24 * 3600 * 1000, `community vote: ${reason}`); // 24h, reversible
-      log.warn("member timed out by vote", { targetId, reason });
+      await member.timeout(24 * 3600 * 1000, `community vote: ${vote.reason}`); // 24h, reversible
+      log.warn("member timed out by vote", { targetId: vote.target_id, reason: vote.reason });
     }
   } catch (e) {
-    log.error("enforce failed", { targetId, err: String(e) });
+    log.error("enforce failed", { action: vote.action, err: String(e) });
   }
 }

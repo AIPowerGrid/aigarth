@@ -8,19 +8,35 @@
  */
 import { runTurn } from "./agent.js";
 
+// Capture whatever the agent "says" through its reply tool (or the addressed
+// safety-net free text), without touching Discord.
+let said = "";
 const r = await runTurn({
   channelId: "smoke",
   channelName: "smoke",
   userId: "smoke",
   userName: "tester",
   text: "Reply with a short friendly hello.",
-  addressed: true,
+  mentioned: true,
+  actions: {
+    reply: async (t) => {
+      said += t;
+    },
+    react: async () => {},
+    replyInThread: async (t) => {
+      said += t;
+    },
+    startBanPoll: async () => {},
+    startDeletePoll: async () => {},
+    canModerate: false,
+  },
 });
 
-console.log("reply:", JSON.stringify(r.text));
-console.log("error:", r.error, "| images:", r.images.length, "| reacted:", r.reacted);
+const reply = said || r.finalText;
+console.log("reply:", JSON.stringify(reply));
+console.log("error:", r.error, "| images:", r.images.length, "| via tool:", said.length > 0);
 
-if (r.error || !r.text) {
+if (r.error || !reply) {
   console.error("❌ SMOKE FAIL — agent returned empty/error (brain not reachable?)");
   process.exit(1);
 }

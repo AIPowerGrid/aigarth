@@ -77,23 +77,26 @@ export const config = {
 
   // Behavior
   historyWindow: num("HISTORY_WINDOW", 10),
-  // Per-user cooldown between full agent runs (ms) — cost/abuse control.
+  // Per-user cooldown between agent runs (ms) — pure cost/abuse control, NOT a
+  // content decision (whether/how to engage is the model's call).
   userCooldownMs: num("USER_COOLDOWN_MS", 4000),
-  // Per-channel cooldown for PROACTIVE (unaddressed) chime-ins — anti-spam.
-  proactiveCooldownMs: num("PROACTIVE_COOLDOWN_MS", 90000),
-  // Cheap/fast model that judges "should I chime in?" for proactive candidates
-  // (second-stage gate after the free heuristic, before the full agent).
-  gridGateModel: process.env.GRID_GATE_MODEL ?? "grid/llama-3.1-8b-instant",
-  // Self-throttle: if the bot replied in a channel within this window, it's much
-  // less likely to chime in proactively again (don't dominate).
+  // "Spoke recently" window: if the bot posted in a channel within this window,
+  // the model is told so (context signal) so it doesn't dominate the room.
   selfThrottleMs: num("SELF_THROTTLE_MS", 120000),
-  // Beat before the typing indicator shows — a person doesn't start typing the
-  // instant a message lands. Makes the chime-in feel less robotic.
-  typingDelayMs: num("TYPING_DELAY_MS", 1000),
+  // Burst coalescing: wait this long for a person to finish a multi-message thought
+  // before responding; a newer message from the same user supersedes the older turn.
+  // 0 disables. Keeps the bot from answering half a sentence.
+  burstDebounceMs: num("BURST_DEBOUNCE_MS", 1200),
+  // Hard ceiling on a single agent turn. If a grid worker stalls mid-stream the turn
+  // is aborted so it can't hang forever (generous, to allow slow image gen).
+  turnTimeoutMs: num("TURN_TIMEOUT_MS", 120000),
+  // How many durable facts to keep per user (local per-user memory).
+  userMemoryMax: num("USER_MEMORY_MAX", 30),
   // Hard backstop: max bot messages per channel per rolling minute (all kinds).
   maxRepliesPerMin: num("MAX_REPLIES_PER_MIN", 10),
-  // Ban-vote thresholds (human votes; the bot does not self-vote in the port).
-  banVoteThreshold: num("BAN_VOTE_THRESHOLD", 3),
+  // Community moderation votes (scam screen + the AI's ban/delete polls). Human
+  // votes only; the bot never self-votes. 4 ✅ enact, 3 ❌ dismiss.
+  banVoteThreshold: num("BAN_VOTE_THRESHOLD", 4),
   dismissVoteThreshold: num("DISMISS_VOTE_THRESHOLD", 3),
   banVoteTtlMs: num("BAN_VOTE_TTL_MS", 86_400_000),
   // Outcome of a successful scam vote: "timeout" (reversible) or "ban".

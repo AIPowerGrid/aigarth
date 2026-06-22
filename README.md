@@ -74,18 +74,34 @@ npm start
 | `set_channel_status` | Record channel summary | real tool, not a JSON side-channel |
 | `remember` / `recall` | Long-term memory | **hindsight** (semantic), not full-dump K/V |
 
-## Discord layer (deterministic, off the LLM path)
+## Discord layer — the AI decides, actions are tools
 
-- **Two-tier gating** (`discord/gating.ts`): **addressed** (mention/name/reply-to-bot/DM) → always run; **proactive** (unaddressed) → a *free* chattiness-weighted gate decides whether to even wake the LLM (so chattiness is meaningful again without an LLM call per message); else **skip**. Per-user cooldown + per-channel proactive cooldown.
-- **Decide-to-respond + emoji**: on any run the agent can **reply**, **`react`** with a single emoji (the `react` skill), or **stay silent** (no text, no react) — restoring the old behavior, now driven by real tool-calling instead of JSON-in-text.
-- **Scam moderation** (`discord/scam.ts`): deterministic, **fail-closed** screen (untrusted invites / wallet-drainer phrasing + link), registered-host allowlist (no substring "trust"), **persisted** ban votes via raw reaction events, default outcome a reversible **timeout**, no bot self-vote.
+There is **no regex** deciding whether the bot is "addressed" and **no separate respond/ignore
+gate**. Every eligible message goes to the agent with rich context, and the agent decides what
+to do — by calling tools:
+
+- **Participation is tool-driven** (`skills/discordActions.ts` + `skills/react.ts`): `reply`
+  (the real chat message — plain model text is private scratch, only `reply` posts),
+  `react` (one emoji), `reply_in_thread` (branch a side-conversation). To **stay silent**, the
+  model simply calls nothing.
+- **Good context, framed as a participant** (`agent.ts`): the model is shown where it is, the
+  recent transcript, whether it just spoke, and *how the latest message relates to it*
+  (mentioned / replied-to / DM / just-overheard) — structured Discord facts, not verdicts — then
+  decides whether and how to engage.
+- **Community-vote moderation** (`discord/scam.ts`): the deterministic **fail-closed** scam
+  screen still runs first (untrusted invites / wallet-drainer phrasing + link, registered-host
+  allowlist). On top of that the AI can *propose* `start_ban_poll` / `start_delete_poll` — these
+  only enact on **4 human ✅ votes** (`BAN_VOTE_THRESHOLD`); the bot never decides or self-votes.
+  Votes are persisted via raw reaction events.
+- **Mechanical backstops only** (`discord/gating.ts`): per-user cooldown + a rolling
+  per-channel reply ceiling — pure cost/anti-flood limits, no content reads.
 - **Commands** (`discord/commands.ts`): `!help`, admin `!chattiness` / `!remember` / `!upload` / `!list` / `!delete`.
-- **State** (`store/db.ts`): better-sqlite3 (WAL, epoch-ms, id-ordering, size budgets) for history, channel status, settings, ban votes.
+- **State** (`store/db.ts`): better-sqlite3 (WAL, epoch-ms, id-ordering, size budgets) for history, channel status, settings, moderation votes.
 
 ## Audit outcome (ported with improvements)
 
 **Kept+improved:** image gen, doc RAG, channel-status awareness, message history, teach-a-fact, scam moderation, crypto, link previews.
-**Replaced:** legacy Horde text endpoint + mega-prompt JSON-munging → Grid `/v1` + real tool calling; full-dump memory → hindsight; blocking `requests` → async; per-message LLM "should I respond" → cheap gating.
+**Replaced:** legacy Horde text endpoint + mega-prompt JSON-munging → Grid `/v1` + real tool calling; full-dump memory → hindsight; blocking `requests` → async; regex "addressed?" gating + JSON-in-text respond/react → the AI deciding, with reply/react/thread/moderation as real tools.
 **Dropped:** `mood`, `recent_happenings` (dead code), reaction-to-previous-message guessing, the SSRF-prone `ingest_from_url` path.
 **Security fixes:** SSRF guard on all server-side URL fetches, fail-closed scam screen, proper host parsing, persisted votes, rate limiting.
 
