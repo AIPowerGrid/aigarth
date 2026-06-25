@@ -8,9 +8,12 @@
  *   - LoRA support is wired through now (structurally) so we can attach LoRAs
  *     later without touching the call path
  *
- * Model ids MUST match what the grid's image workers advertise
- * (GET /api/v2/status/models?type=image). Today that's `z-image-turbo` and
- * `flux.2 klein 4b fp8`. Add models here as the grid serves them.
+ * Model ids MUST match what the grid's image workers advertise. The legacy
+ * `/api/v2/status/models` endpoint is RETIRED — to list online image models, POST
+ * an unknown model id to `/v1/images/generations`; the 404 body enumerates them
+ * (e.g. `['Krea 2 Turbo', 'FLUX.2 Klein 4B FP8', 'LTX-2.3', 'z-image-turbo']`).
+ * The `/v1/images/generations` endpoint also honors `steps` + `cfg_scale` (verified),
+ * so the per-style tuning below actually applies (see skills/generateImage.ts).
  */
 
 /** A LoRA attachment. `model`/`clip` are strengths (0..~1.5). Passed straight
@@ -93,25 +96,43 @@ function standardStyles(steps: number, cfg: number, sampler: string): Record<str
 }
 
 export const IMAGE_MODELS: Record<string, ImageModel> = {
-  // NOTE: z-image-turbo is intentionally NOT registered — its workers hang on
-  // the grid (jobs stick in "processing" for minutes). Re-add it here only once
-  // those workers are fixed. flux.2 klein is the working image model.
+  // Default: Krea 2 Turbo — 8-step distilled, fast AND high quality. The grid
+  // honors steps/cfg_scale, so 8 steps @ cfg 3.5 (the turbo sweet spot) applies.
+  "Krea 2 Turbo": {
+    id: "Krea 2 Turbo",
+    label: "Krea 2 Turbo",
+    description:
+      "Fast, high-quality default (8-step distilled Krea 2). Excellent aesthetic " +
+      "for both photoreal and stylized work, and quick to generate. Use for almost " +
+      "everything.",
+    defaultStyle: "default",
+    styles: standardStyles(8, 3.5, "k_euler"),
+  },
   "FLUX.2 Klein 4B FP8": {
     id: "FLUX.2 Klein 4B FP8",
     label: "FLUX.2 Klein",
     description:
-      "Higher-quality Flux model. Best for detailed, polished, photoreal or " +
-      "illustrative work where quality matters more than speed (slower than " +
-      "Turbo). Prefer for hero images, complex scenes, text-in-image.",
+      "Slower, heavier Flux model. Pick ONLY when someone explicitly wants maximum " +
+      "detail/polish and will wait longer; otherwise Krea 2 Turbo is the better call.",
     defaultStyle: "default",
     // Full(er) model: more steps, modest cfg.
     styles: standardStyles(24, 3.5, "k_euler"),
   },
 };
 
-// flux.2 klein is the model that actually works on the grid right now;
-// z-image-turbo workers hang. Name must match what the v2 worker advertises.
-export const DEFAULT_MODEL_ID = "FLUX.2 Klein 4B FP8";
+// Krea 2 Turbo is the fast, high-quality default the grid serves. Other online
+// image models (FLUX.2 Klein, LTX-2.3, z-image-turbo) — discover via the 404 trick
+// noted up top. z-image-turbo historically hung; verify before registering it.
+export const DEFAULT_MODEL_ID = "Krea 2 Turbo";
+
+/** Aspect-ratio presets — a first-class orientation choice, independent of the
+ *  artistic style. Geometry tuned for 1:1 / 2:3 / 3:2 in the 1k–2k turbo range. */
+export const ORIENTATIONS: Record<string, { width: number; height: number }> = {
+  square: { width: 1024, height: 1024 },
+  portrait: { width: 832, height: 1216 },
+  landscape: { width: 1216, height: 832 },
+};
+export const ORIENTATION_IDS = Object.keys(ORIENTATIONS);
 
 export function getModelOrDefault(id?: string): ImageModel {
   if (id && IMAGE_MODELS[id]) return IMAGE_MODELS[id];

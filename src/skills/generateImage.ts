@@ -7,6 +7,8 @@ import {
   getStyleOrDefault,
   MODEL_IDS,
   ALL_STYLE_IDS,
+  ORIENTATIONS,
+  ORIENTATION_IDS,
 } from "../images/registry.js";
 
 /**
@@ -27,18 +29,27 @@ export function makeGenerateImageTool(): AgentTool {
       catalogForLlm() +
       `\n\nValid model ids: ${MODEL_IDS.map((m) => `"${m}"`).join(", ")}.` +
       `\nValid style ids: ${ALL_STYLE_IDS.join(", ")}.` +
-      "\nOmit model/style for sensible defaults.",
+      `\nOrientation (aspect): ${ORIENTATION_IDS.join(", ")} — portrait=tall, landscape=wide, square=1:1.` +
+      "\nOmit model/style/orientation for sensible defaults (square).",
     parameters: Type.Object({
       prompt: Type.String({ description: "What to draw. Be vivid and specific." }),
       model: Type.Optional(Type.String({ description: `Model id. One of: ${MODEL_IDS.join(", ")}.` })),
       style: Type.Optional(Type.String({ description: `Style preset. One of: ${ALL_STYLE_IDS.join(", ")}.` })),
+      orientation: Type.Optional(
+        Type.String({ description: `Aspect ratio. One of: ${ORIENTATION_IDS.join(", ")}. Use portrait for people/characters, landscape for scenery/banners.` }),
+      ),
       count: Type.Optional(Type.Number({ description: "How many images (1-4, default 1)." })),
     }),
     execute: async (_id, params: any, signal) => {
       const model = getModelOrDefault(params.model);
       const style = getStyleOrDefault(model, params.style);
       const n = Math.max(1, Math.min(Number(params.count ?? 1), 4));
-      const size = `${style.width}x${style.height}`;
+      // Orientation, when given, is a first-class aspect choice that overrides the
+      // style's geometry (so "vivid + landscape" works, not just "landscape style").
+      const orient = params.orientation ? ORIENTATIONS[String(params.orientation).toLowerCase()] : undefined;
+      const width = orient ? orient.width : style.width;
+      const height = orient ? orient.height : style.height;
+      const size = `${width}x${height}`;
 
       const res = await fetch(`${config.gridV1Url.replace(/\/$/, "")}/images/generations`, {
         method: "POST",
@@ -48,6 +59,10 @@ export function makeGenerateImageTool(): AgentTool {
           prompt: params.prompt,
           n,
           size,
+          // The grid honors these extensions; they make the per-model tuning real
+          // (e.g. Krea 2 Turbo's 8 steps → faster gens) instead of worker defaults.
+          steps: style.steps,
+          cfg_scale: style.cfgScale,
           response_format: "url",
         }),
         signal,

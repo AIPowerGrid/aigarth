@@ -39,6 +39,28 @@ export function makeRememberTool(getTags: () => string[], saveUserFact: (fact: s
   };
 }
 
+/**
+ * @param forget local per-user forget (keyed to the current person) — removes facts
+ *   matching the given text. Pairs with `remember`.
+ */
+export function makeForgetTool(forget: (text: string) => number): AgentTool {
+  return {
+    name: "forget",
+    label: "Forget",
+    description:
+      "Delete something you remember about the person you're talking to — an " +
+      "outdated, wrong, or no-longer-relevant fact. Give a word/phrase from the " +
+      "fact; every stored fact about them containing it is removed.",
+    parameters: Type.Object({
+      about: Type.String({ description: "A word/phrase from the fact(s) to forget." }),
+    }),
+    execute: async (_id, params: any) => {
+      const n = forget(String(params.about ?? ""));
+      return { content: [{ type: "text", text: n > 0 ? `forgot ${n} thing(s)` : "nothing matched" }], details: {} };
+    },
+  };
+}
+
 export function makeRecallTool(getTags: () => string[]): AgentTool {
   return {
     name: "recall",

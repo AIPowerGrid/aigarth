@@ -4,15 +4,22 @@ import {
   Events,
   AttachmentBuilder,
   Partials,
+  ActivityType,
   type Message,
   type MessageMentionOptions,
+  type OmitPartialGroupDMChannel,
 } from "discord.js";
+
+/** A message from the MessageCreate event — its channel is guaranteed sendable
+ *  (the partial group-DM channel, which can't be replied to, is excluded). */
+type EventMessage = OmitPartialGroupDMChannel<Message>;
 import { config } from "./config.js";
 import { log } from "./util/log.js";
-import { messages, banVotes, settings } from "./store/db.js";
-import { passCooldown, isCommand, canSend, recordBotSend, botSpokeRecently } from "./discord/gating.js";
+import { messages, banVotes, settings, reminders } from "./store/db.js";
+import { isCommand, canSend, recordBotSend, botSpokeRecently } from "./discord/gating.js";
 import { handleCommand } from "./discord/commands.js";
 import { screenMessage, openBanVote, openModerationVote, handleVoteReaction } from "./discord/scam.js";
+import { decideEngagement } from "./discord/gate.js";
 import type { DiscordActions } from "./skills/discordActions.js";
 import { runTurn } from "./agent.js";
 
@@ -35,8 +42,276 @@ const TRACKED = new Set([...config.channels, ...config.readonlyChannels]);
 // speaks in plain text and addresses people by name, like a person would).
 const SAFE_MENTIONS: MessageMentionOptions = { parse: [], repliedUser: false };
 
-// Burst coalescing state: latest message id per (channel, author).
-const burstLatest = new Map<string, string>();
+// ── Conversation coalescing: ONE attention per channel ───────────────────────
+// A real participant doesn't spin up a separate brain per message — it watches the
+// channel and responds to where the conversation IS. Each channel has at most one
+// turn running at a time; new messages reset a short "settle" timer and update the
+// latest state, then a single turn responds to that current state. This structurally
+// prevents answering stale messages or posting out of order.
+interface Activity {
+  message: EventMessage;
+  inTracked: boolean;
+  content: string;
+  priorHistory: string;
+  modTarget: Message;
+  mentioned: boolean;
+  repliedToBot: boolean;
+  isDM: boolean;
+  addressed: boolean;
+  imageUrls: string[];
+}
+interface ChanState {
+  timer: ReturnType<typeof setTimeout> | null;
+  running: boolean;
+  pending: Activity | null; // latest activity awaiting a turn (newest wins)
+}
+const chanStates = new Map<string, ChanState>();
+/** Channels where the bot has muted itself until a timestamp (the snooze tool). */
+export const snoozedUntil = new Map<string, number>();
+
+/** Arm the settle timer if not already running/armed. The timer is NOT pushed back
+ *  by every new message (that could delay a response indefinitely in a busy channel);
+ *  it fires a bounded time after the pending state was first set. */
+function arm(channelId: string): void {
+  const st = chanStates.get(channelId);
+  if (!st || st.running || !st.pending || st.timer) return;
+  const settle = st.pending.addressed ? config.convSettleAddressedMs : config.convSettleMs;
+  st.timer = setTimeout(() => {
+    st.timer = null;
+    void runChannelTurn(channelId);
+  }, settle);
+}
+
+/** Record new channel activity. Newest state wins EXCEPT a pending message the bot
+ *  was directly addressed in is sticky — later unaddressed chatter must not bury an
+ *  @-mention/reply/name-call before the turn runs (that dropped responses). */
+function noteActivity(act: Activity): void {
+  const channelId = act.message.channelId;
+  let st = chanStates.get(channelId);
+  if (!st) {
+    st = { timer: null, running: false, pending: null };
+    chanStates.set(channelId, st);
+  }
+  const upgradeToAddressed = act.addressed && !st.pending?.addressed;
+  if (!st.pending || act.addressed || !st.pending.addressed) st.pending = act;
+  if (st.running) return;
+  // If this message upgraded the pending state to "addressed", expedite: cancel the
+  // longer unaddressed timer so we respond promptly instead of after the full window.
+  if (upgradeToAddressed && st.timer) {
+    clearTimeout(st.timer);
+    st.timer = null;
+  }
+  arm(channelId);
+}
+
+/** Run a single turn for the channel's current state. One at a time per channel. */
+async function runChannelTurn(channelId: string): Promise<void> {
+  const st = chanStates.get(channelId);
+  if (!st || st.running || !st.pending) return;
+  const act = st.pending;
+  st.pending = null;
+  st.running = true;
+
+  const message = act.message;
+  const modTarget = act.modTarget;
+  const inTracked = act.inTracked;
+  let typingTimer: ReturnType<typeof setInterval> | null = null;
+  let typingChannel: any = null;
+
+  try {
+    if ((snoozedUntil.get(channelId) ?? 0) > Date.now()) {
+      log.debug("snoozed; skipping turn", { ch: channelId });
+      return;
+    }
+    if (!canSend(channelId)) {
+      log.warn("per-channel reply ceiling hit; skipping", { channel: channelId });
+      return;
+    }
+
+    // Structural fast-paths (@-mention / reply-to-bot / DM) always respond and skip
+    // the gate. Everything else goes through the cheap gate model, which decides
+    // respond / react / ignore — handling ALL addressing judgment (name in any form,
+    // implicit address, worth-chiming-in) so there's no name matcher.
+    if (!act.addressed) {
+      const decision = await decideEngagement({
+        history: act.priorHistory,
+        latest: act.content,
+        userName: message.author.displayName ?? message.author.username,
+        recentlyEngaged: botSpokeRecently(channelId),
+        chattiness: settings.getChattiness(),
+      });
+      log.info("gate", { ch: channelId, action: decision.action, emoji: decision.emoji });
+      if (decision.action === "ignore") return;
+      if (decision.action === "react") {
+        try {
+          await modTarget.react(decision.emoji || "👍");
+          recordBotSend(channelId);
+        } catch (e) {
+          log.debug("react failed", { err: String(e) });
+        }
+        return;
+      }
+      // respond → fall through to the full chat agent
+    }
+
+    const startTyping = (channel: any): void => {
+      typingChannel = channel;
+      const tick = () => {
+        if (typingChannel && "sendTyping" in typingChannel) typingChannel.sendTyping().catch(() => {});
+      };
+      if (typingTimer) return;
+      tick();
+      typingTimer = setInterval(tick, 8000);
+    };
+    const NO_TYPING = new Set([
+      "react", "reply", "reply_in_thread", "start_ban_poll", "start_delete_poll",
+      "set_channel_status", "remember", "forget", "set_mood", "snooze", "set_chattiness",
+    ]);
+
+    const pendingImages: string[] = [];
+    let firstReplySent = false;
+    let sentAnything = false;
+
+    const postText = async (text: string): Promise<void> => {
+      const clean = stripImageMarkdown(text ?? "");
+      const files = pendingImages.length ? await fetchAttachments(pendingImages.splice(0)) : [];
+      const parts = chunk(clean);
+      if (parts.length === 0 && files.length === 0) return;
+      if (!firstReplySent) {
+        startTyping(message.channel);
+        // Inline-reply only if the triggering message is still the latest in the
+        // channel; otherwise plain-send so a reply doesn't visibly pin to an old msg.
+        const stillCurrent = (message.channel as any).lastMessageId === message.id;
+        const payload = { content: parts[0] || undefined, files, allowedMentions: SAFE_MENTIONS };
+        if (stillCurrent) await message.reply(payload);
+        else await message.channel.send(payload);
+        firstReplySent = true;
+      } else {
+        await message.channel.send({ content: parts[0] || undefined, files, allowedMentions: SAFE_MENTIONS });
+      }
+      for (const p of parts.slice(1)) await message.channel.send({ content: p, allowedMentions: SAFE_MENTIONS });
+      recordBotSend(channelId);
+      sentAnything = true;
+      if (inTracked && clean) messages.add(channelId, config.botName, clean, client.user?.id ?? null, true);
+    };
+
+    const actions: DiscordActions = {
+      reply: postText,
+      react: async (emoji: string) => {
+        await modTarget.react(emoji);
+        recordBotSend(channelId);
+        sentAnything = true;
+      },
+      replyInThread: async (text: string, threadName?: string) => {
+        try {
+          let thread = message.thread ?? null;
+          if (!thread && typeof (message as any).startThread === "function") {
+            thread = await (message as any).startThread({
+              name: (threadName || `chat with ${message.author.displayName ?? message.author.username}`).slice(0, 90),
+            });
+          }
+          if (!thread) return postText(text);
+          const parts = chunk(stripImageMarkdown(text));
+          const files = pendingImages.length ? await fetchAttachments(pendingImages.splice(0)) : [];
+          startTyping(thread);
+          await thread.send({ content: parts[0] || undefined, files, allowedMentions: SAFE_MENTIONS });
+          for (const p of parts.slice(1)) await thread.send({ content: p, allowedMentions: SAFE_MENTIONS });
+          recordBotSend(channelId);
+          sentAnything = true;
+          if (inTracked && text) messages.add(channelId, config.botName, text, client.user?.id ?? null, true);
+        } catch (e) {
+          log.debug("thread reply failed; replying inline", { err: String(e) });
+          await postText(text);
+        }
+      },
+      startBanPoll: async (reason: string) => {
+        if (!message.guild) return;
+        await openModerationVote({
+          channel: message.channel, guildId: message.guild.id, targetUserId: modTarget.author.id,
+          action: "ban", reason, evidence: modTarget.content, targetMsgId: modTarget.id,
+        });
+        sentAnything = true;
+      },
+      startDeletePoll: async (reason: string) => {
+        if (!message.guild) return;
+        await openModerationVote({
+          channel: message.channel, guildId: message.guild.id, targetUserId: modTarget.author.id,
+          action: "delete", reason, evidence: modTarget.content, targetMsgId: modTarget.id,
+        });
+        sentAnything = true;
+      },
+      canModerate: !!message.guild,
+      inGuild: !!message.guild,
+      snooze: (minutes: number) => {
+        snoozedUntil.set(channelId, Date.now() + minutes * 60_000);
+        log.info("snoozed channel", { ch: channelId, minutes });
+      },
+      setNickname: async (name: string) => {
+        const clean = name.replace(/[@`]/g, "").slice(0, 32).trim();
+        const me = message.guild?.members?.me;
+        if (!me) return "can't change nickname here";
+        await me.setNickname(clean || null);
+        return clean ? `nickname set to ${clean}` : "nickname reset";
+      },
+      setPresence: async (text: string) => {
+        const t = text.replace(/@/g, "").slice(0, 80).trim();
+        if (!client.user) return;
+        if (!t) client.user.setActivity();
+        else client.user.setActivity({ name: t, type: ActivityType.Custom, state: t });
+      },
+      createPoll: async (question: string, options: string[], hours: number) => {
+        await message.channel.send({
+          poll: {
+            question: { text: question.slice(0, 300) },
+            answers: options.slice(0, 10).map((o) => ({ text: o.slice(0, 55) })),
+            duration: Math.max(1, Math.min(768, Math.round(hours || 24))), // hours; Discord max 32d
+            allowMultiselect: false,
+          },
+          allowedMentions: SAFE_MENTIONS,
+        });
+        recordBotSend(channelId);
+        sentAnything = true;
+      },
+      remind: async (text: string, minutes: number) => {
+        reminders.add(channelId, message.author.id, text.slice(0, 500), Date.now() + minutes * 60_000);
+      },
+    };
+
+    log.info("running turn", { ch: channelId, addressed: act.addressed, len: act.content.length });
+    const result = await runTurn({
+      channelId,
+      channelName: ("name" in message.channel ? (message.channel as any).name : undefined) ?? "DM",
+      userId: message.author.id,
+      userName: message.author.displayName ?? message.author.username,
+      text: act.content || "(they pinged you with no other text)",
+      imageUrls: act.imageUrls,
+      history: act.priorHistory,
+      chattiness: settings.getChattiness(),
+      mentioned: act.mentioned,
+      repliedToBot: act.repliedToBot,
+      isDM: act.isDM,
+      gateEngaged: !act.addressed, // reached here via the gate, not a structural fast-path
+      spokeRecently: botSpokeRecently(channelId),
+      actions,
+      onImage: (u) => pendingImages.push(u),
+      onToolStart: (tool) => {
+        if (!NO_TYPING.has(tool)) startTyping(message.channel);
+      },
+    });
+
+    if (pendingImages.length) await postText("");
+    // We only reach the full agent when intending to respond (fast-path or gate→respond),
+    // so post its final text if it produced one without calling reply.
+    if (!sentAnything && result.finalText) await postText(result.finalText);
+    log.info("turn done", { ch: channelId, sent: sentAnything, error: result.error });
+  } catch (err) {
+    log.error("channel turn error", { err: String(err) });
+  } finally {
+    if (typingTimer) clearInterval(typingTimer);
+    st.running = false;
+    if (st.pending) arm(channelId); // activity arrived during the turn → go again
+  }
+}
 
 client.once(Events.ClientReady, (c) => {
   log.info("aigarth online", { tag: c.user.tag, model: config.gridChatModel });
@@ -46,13 +321,50 @@ client.once(Events.ClientReady, (c) => {
     banVotes.expire(config.banVoteTtlMs);
     if (removed) log.debug("history cleanup", { removed });
   }, 6 * 3600 * 1000).unref();
+
+  // Reminder delivery: post due reminders (the `remind` tool), pinging the user.
+  setInterval(async () => {
+    for (const r of reminders.due(Date.now())) {
+      try {
+        const ch = await client.channels.fetch(r.channel_id).catch(() => null);
+        if (ch && "send" in ch) {
+          await (ch as any).send({
+            content: `⏰ <@${r.user_id}> reminder: ${r.text}`,
+            allowedMentions: { users: [r.user_id] },
+          });
+        }
+      } catch (e) {
+        log.debug("reminder delivery failed", { err: String(e) });
+      }
+      reminders.fire(r.id);
+    }
+  }, 30_000).unref();
 });
 
 /** Strip markdown image embeds + attachment:// refs the model sometimes writes
  *  — the real image is posted as a Discord attachment, so these render as broken
  *  raw text. Leaves normal [text](url) links alone (only `![...]()` is removed). */
+/** Some models emit a tool call as literal TEXT instead of a real function call —
+ *  e.g. `{"tool":"functions.reply","args":{"text":"…"}}` (optionally in a ```json
+ *  fence). When that leaks into the reply, unwrap it to the inner text so we post
+ *  the message, not the JSON. Non-matching text is returned unchanged. */
+function unwrapToolCallText(text: string): string {
+  let body = text.trim();
+  const fence = body.match(/^```(?:json|tool_call)?\s*([\s\S]*?)\s*```$/i);
+  if (fence) body = fence[1].trim();
+  if (!(body.startsWith("{") && body.endsWith("}") && /"text"\s*:/.test(body))) return text;
+  try {
+    const o = JSON.parse(body);
+    const inner = o?.args?.text ?? o?.parameters?.text ?? o?.text ?? o?.arguments?.text;
+    if (typeof inner === "string" && inner.trim()) return inner.trim();
+  } catch {
+    /* not valid JSON — leave as-is */
+  }
+  return text;
+}
+
 function stripImageMarkdown(text: string): string {
-  return text
+  return unwrapToolCallText(text)
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "") // ![alt](...)
     .replace(/\battachment:\/\/\S+/g, "") // bare attachment:// refs
     .replace(/\n{3,}/g, "\n\n")
@@ -109,11 +421,10 @@ function renderMentions(message: Message, opts: { stripBot?: boolean } = {}): st
     .trim();
 }
 
+// Ingestion: per-message bookkeeping (history, commands, scam, eligibility,
+// signals), then hand the channel's current state to the coalescer. The actual
+// turn runs in runChannelTurn — one per channel, after a short settle.
 client.on(Events.MessageCreate, async (message) => {
-  // Typing-heartbeat + channel-lock state, hoisted so the `finally` can always
-  // clean them up regardless of where we return.
-  let typingTimer: ReturnType<typeof setInterval> | null = null;
-  let typingChannel: any = null;
   try {
     if (message.author.bot) return;
     const inTracked = !message.guild || TRACKED.size === 0 || TRACKED.has(message.channelId);
@@ -125,10 +436,8 @@ client.on(Events.MessageCreate, async (message) => {
       guild: !!message.guild,
     });
 
-    // Snapshot PRIOR history BEFORE storing this message, so the agent sees the
-    // earlier conversation and the current message appears exactly once (as the
-    // "Latest —" line in contextBlock), not duplicated in the transcript too.
-    // Stored content has mentions resolved to names, so the transcript reads naturally.
+    // Snapshot PRIOR history BEFORE storing this message (so it's not duplicated in
+    // context), then store the message (mentions resolved to readable names).
     let priorHistory = "";
     if (inTracked) {
       priorHistory = messages.formatRecent(message.channelId, config.historyWindow);
@@ -150,9 +459,7 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    // Mechanical eligibility ONLY — no content decision. We respond in active
-    // (non-readonly) tracked channels + DMs; whether/how to engage is the model's
-    // call below.
+    // Respond only in active (non-readonly) tracked channels + DMs.
     const respondable = !message.guild
       ? true
       : (config.channels.length === 0 || config.channels.includes(message.channelId)) &&
@@ -165,8 +472,8 @@ client.on(Events.MessageCreate, async (message) => {
     const content = renderMentions(message, { stripBot: true });
 
     // Moderation/react/reply target: the replied-to message if this is a reply, else
-    // the triggering message itself (so "@aigarth ban this" hits the offender, and
-    // we can tell when someone is replying to the BOT even with the ping turned off).
+    // the triggering message (so "@aigarth ban this" hits the offender, and we can
+    // tell when someone is replying to the BOT even with the ping turned off).
     let modTarget: Message = message;
     if (message.reference?.messageId && "messages" in message.channel) {
       modTarget =
@@ -175,201 +482,28 @@ client.on(Events.MessageCreate, async (message) => {
 
     // Structured Discord facts (not regex) — handed to the model as context.
     const mentioned = client.user ? message.mentions.has(client.user.id) : false;
-    // Reply-to-bot works even when the reply ping is OFF: check the referenced
-    // message's author, falling back to the pinged-reply signal.
     const repliedToBot =
       !!client.user &&
       ((!!message.reference?.messageId && modTarget !== message && modTarget.author?.id === client.user.id) ||
         message.mentions.repliedUser?.id === client.user.id);
     const isDM = !message.guild;
+    // Structural fast-paths only — name/implicit addressing is judged by the gate later.
     const addressed = mentioned || repliedToBot || isDM;
 
-    // Nothing to work with — but a bare "@aigarth" (addressed, no text) is a real
-    // ping and should get a response, not silence.
+    // A bare "@aigarth" (addressed, no text) is a real ping; unaddressed empty isn't.
     if (!content && message.attachments.size === 0 && !addressed) return;
-
-    // Per-user cooldown is a cost/abuse guard for UNADDRESSED chatter only — a direct
-    // mention / reply-to-bot / DM must never be dropped for asking a fast follow-up.
-    if (!addressed && !passCooldown(message.author.id)) {
-      log.debug("cooldown skip", { user: message.author.id });
-      return;
-    }
-    // Per-channel flood ceiling still applies to everyone (runaway-loop protection).
-    if (!canSend(message.channelId)) {
-      log.warn("per-channel reply ceiling hit; skipping", { channel: message.channelId });
-      return;
-    }
-
-    // Burst coalescing: a person often types a thought across several messages. Wait
-    // a beat; if they send another in the meantime, drop this turn and let the newer
-    // one respond — by then the whole burst is already in history. (All messages are
-    // stored above, so nothing is lost.) Turns otherwise run independently — we do NOT
-    // serialize per channel: a single slow turn must never block the rest of the room.
-    const burstKey = `${message.channelId}:${message.author.id}`;
-    burstLatest.set(burstKey, message.id);
-    if (config.burstDebounceMs > 0) {
-      await new Promise((r) => setTimeout(r, config.burstDebounceMs));
-      if (burstLatest.get(burstKey) !== message.id) {
-        log.debug("superseded by newer message in burst", { channel: message.channelId });
-        return;
-      }
-    }
-
-    // "typing…" heartbeat — shown ONLY while he's actively working toward a reply
-    // (a slow tool like image gen is running) or about to post, never up front and
-    // never when he'll just react or stay silent. Discord clears the indicator after
-    // ~10s, so we re-send on an interval to keep it alive across long work, and stop
-    // it when the turn ends. Idempotent: re-calling start just retargets the channel.
-    const startTyping = (channel: any): void => {
-      typingChannel = channel;
-      const tick = () => {
-        if (typingChannel && "sendTyping" in typingChannel) typingChannel.sendTyping().catch(() => {});
-      };
-      if (typingTimer) return; // already beating
-      tick();
-      typingTimer = setInterval(tick, 8000);
-    };
-    // Tools that are NOT "working toward a reply" — they shouldn't trigger typing.
-    // (reply/thread handle their own typing at the post site; react/polls/status/
-    // memory are either not a message or instant background writes.)
-    const NO_TYPING = new Set([
-      "react",
-      "reply",
-      "reply_in_thread",
-      "start_ban_poll",
-      "start_delete_poll",
-      "set_channel_status",
-      "remember",
-      "recall",
-    ]);
-
-    // ── Per-turn Discord surface: the side effects the model's tools drive. ──
-    const pendingImages: string[] = []; // images skills produced, awaiting a reply to attach to
-    let firstReplySent = false;
-    let sentAnything = false;
-
-    const postText = async (text: string): Promise<void> => {
-      const clean = stripImageMarkdown(text ?? "");
-      const files = pendingImages.length ? await fetchAttachments(pendingImages.splice(0)) : [];
-      const parts = chunk(clean);
-      if (parts.length === 0 && files.length === 0) return;
-      if (!firstReplySent) {
-        startTyping(message.channel); // he intends to respond → typing until it posts
-        await message.reply({ content: parts[0] || undefined, files, allowedMentions: SAFE_MENTIONS });
-        firstReplySent = true;
-      } else {
-        await message.channel.send({ content: parts[0] || undefined, files, allowedMentions: SAFE_MENTIONS });
-      }
-      for (const p of parts.slice(1)) await message.channel.send({ content: p, allowedMentions: SAFE_MENTIONS });
-      recordBotSend(message.channelId);
-      sentAnything = true;
-      if (inTracked && clean) {
-        messages.add(message.channelId, config.botName, clean, client.user?.id ?? null, true);
-      }
-    };
-
-    const actions: DiscordActions = {
-      reply: postText,
-      react: async (emoji: string) => {
-        await modTarget.react(emoji);
-        recordBotSend(message.channelId);
-        sentAnything = true;
-      },
-      replyInThread: async (text: string, threadName?: string) => {
-        try {
-          let thread = message.thread ?? null;
-          if (!thread && typeof (message as any).startThread === "function") {
-            thread = await (message as any).startThread({
-              name: (threadName || `chat with ${message.author.displayName ?? message.author.username}`).slice(0, 90),
-            });
-          }
-          if (!thread) return postText(text); // can't thread here → inline
-          const parts = chunk(stripImageMarkdown(text));
-          const files = pendingImages.length ? await fetchAttachments(pendingImages.splice(0)) : [];
-          startTyping(thread); // intends to respond (in-thread) → typing until it posts
-          await thread.send({ content: parts[0] || undefined, files, allowedMentions: SAFE_MENTIONS });
-          for (const p of parts.slice(1)) await thread.send({ content: p, allowedMentions: SAFE_MENTIONS });
-          recordBotSend(message.channelId);
-          sentAnything = true;
-          if (inTracked && text) messages.add(message.channelId, config.botName, text, client.user?.id ?? null, true);
-        } catch (e) {
-          log.debug("thread reply failed; replying inline", { err: String(e) });
-          await postText(text);
-        }
-      },
-      startBanPoll: async (reason: string) => {
-        if (!message.guild) return;
-        await openModerationVote({
-          channel: message.channel,
-          guildId: message.guild.id,
-          targetUserId: modTarget.author.id,
-          action: "ban",
-          reason,
-          evidence: modTarget.content,
-          targetMsgId: modTarget.id,
-        });
-        sentAnything = true;
-      },
-      startDeletePoll: async (reason: string) => {
-        if (!message.guild) return;
-        await openModerationVote({
-          channel: message.channel,
-          guildId: message.guild.id,
-          targetUserId: modTarget.author.id,
-          action: "delete",
-          reason,
-          evidence: modTarget.content,
-          targetMsgId: modTarget.id,
-        });
-        sentAnything = true;
-      },
-      canModerate: !!message.guild,
-    };
 
     const imageUrls = [...message.attachments.values()]
       .filter((a) => (a.contentType ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(a.name ?? ""))
       .map((a) => a.url);
 
-    log.info("running turn", { ch: message.channelId, addressed, len: content.length });
-    const result = await runTurn({
-      channelId: message.channelId,
-      channelName: ("name" in message.channel ? (message.channel as any).name : undefined) ?? "DM",
-      userId: message.author.id,
-      userName: message.author.displayName ?? message.author.username,
-      text: content || "(they pinged you with no other text)",
-      imageUrls,
-      history: priorHistory,
-      chattiness: settings.getChattiness(),
-      mentioned,
-      repliedToBot,
-      isDM,
-      spokeRecently: botSpokeRecently(message.channelId),
-      actions,
-      onImage: (u) => pendingImages.push(u),
-      onToolStart: (tool) => {
-        // Slow, user-facing work (image gen, doc/web reads, charts…) → show typing.
-        if (!NO_TYPING.has(tool)) startTyping(message.channel);
-      },
+    // Hand the channel's current state to the coalescer (one attention per channel).
+    noteActivity({
+      message, inTracked, content, priorHistory, modTarget,
+      mentioned, repliedToBot, isDM, addressed, imageUrls,
     });
-
-    // Leftover images (a skill produced one but the model never called reply).
-    if (pendingImages.length) await postText("");
-
-    // Safety net: clearly addressed but the model wrote text without calling reply
-    // → don't drop the answer. (For UNaddressed turns we respect the silence.)
-    if (!sentAnything && (mentioned || repliedToBot || isDM) && result.finalText) {
-      await postText(result.finalText);
-    }
-    log.info("turn done", { ch: message.channelId, sent: sentAnything, error: result.error });
-    if (!sentAnything && result.error) {
-      // A bad turn is just silence (no apology spam); the failure is in the logs.
-      log.warn("turn errored; staying silent", { channel: message.channelId });
-    }
   } catch (err) {
-    log.error("message handler error", { err: String(err) });
-  } finally {
-    // Never leave a "typing…" indicator beating past the turn.
-    if (typingTimer) clearInterval(typingTimer);
+    log.error("ingest error", { err: String(err) });
   }
 });
 

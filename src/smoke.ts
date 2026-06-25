@@ -29,6 +29,12 @@ const r = await runTurn({
     startBanPoll: async () => {},
     startDeletePoll: async () => {},
     canModerate: false,
+    inGuild: false,
+    snooze: () => {},
+    setNickname: async () => "ok",
+    setPresence: async () => {},
+    createPoll: async () => {},
+    remind: async () => {},
   },
 });
 

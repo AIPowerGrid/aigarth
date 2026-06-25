@@ -56,6 +56,16 @@ CREATE TABLE IF NOT EXISTS user_facts (
 );
 CREATE INDEX IF NOT EXISTS idx_user_facts ON user_facts(user_id, id DESC);
 
+CREATE TABLE IF NOT EXISTS reminders (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL,
+  user_id    TEXT NOT NULL,
+  text       TEXT NOT NULL,
+  due_ts     INTEGER NOT NULL,
+  fired      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(fired, due_ts);
+
 CREATE TABLE IF NOT EXISTS ban_votes (
   message_id    TEXT PRIMARY KEY,   -- the vote message id
   channel_id    TEXT NOT NULL,
@@ -198,6 +208,7 @@ export const settings = {
 const insFact = db.prepare("INSERT INTO user_facts (user_id, user_name, fact, ts) VALUES (?,?,?,?)");
 const selFacts = db.prepare("SELECT fact FROM user_facts WHERE user_id = ? ORDER BY id DESC LIMIT ?");
 const dupFact = db.prepare("DELETE FROM user_facts WHERE user_id = ? AND fact = ?");
+const delFactLike = db.prepare("DELETE FROM user_facts WHERE user_id = ? AND fact LIKE ? COLLATE NOCASE");
 const pruneFacts = db.prepare(
   "DELETE FROM user_facts WHERE user_id = ? AND id NOT IN (SELECT id FROM user_facts WHERE user_id = ? ORDER BY id DESC LIMIT ?)",
 );
@@ -215,6 +226,39 @@ export const userMemory = {
   /** Known facts about a user, oldest→newest. */
   list(userId: string, limit = 12): string[] {
     return (selFacts.all(userId, limit) as { fact: string }[]).map((r) => r.fact).reverse();
+  },
+  /** Delete facts about a user containing `text` (case-insensitive). Returns count. */
+  forget(userId: string, text: string): number {
+    const t = text.trim();
+    if (!t) return 0;
+    return delFactLike.run(userId, `%${t}%`).changes as number;
+  },
+};
+
+// ── reminders (persisted; delivered by a timer in index.ts) ───────────────
+const insReminder = db.prepare(
+  "INSERT INTO reminders (channel_id, user_id, text, due_ts) VALUES (?,?,?,?)",
+);
+const dueReminders = db.prepare("SELECT * FROM reminders WHERE fired = 0 AND due_ts <= ? ORDER BY due_ts LIMIT 20");
+const fireReminder = db.prepare("UPDATE reminders SET fired = 1 WHERE id = ?");
+
+export interface Reminder {
+  id: number;
+  channel_id: string;
+  user_id: string;
+  text: string;
+  due_ts: number;
+}
+
+export const reminders = {
+  add(channelId: string, userId: string, text: string, dueTs: number) {
+    insReminder.run(channelId, userId, clamp(text), dueTs);
+  },
+  due(now: number): Reminder[] {
+    return dueReminders.all(now) as Reminder[];
+  },
+  fire(id: number) {
+    fireReminder.run(id);
   },
 };
 

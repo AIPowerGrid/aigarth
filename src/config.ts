@@ -83,10 +83,17 @@ export const config = {
   // "Spoke recently" window: if the bot posted in a channel within this window,
   // the model is told so (context signal) so it doesn't dominate the room.
   selfThrottleMs: num("SELF_THROTTLE_MS", 120000),
-  // Burst coalescing: wait this long for a person to finish a multi-message thought
-  // before responding; a newer message from the same user supersedes the older turn.
-  // 0 disables. Keeps the bot from answering half a sentence.
-  burstDebounceMs: num("BURST_DEBOUNCE_MS", 1200),
+  // Conversation coalescing: the bot has ONE attention per channel. After activity
+  // it waits this long for the room to settle, then runs a single turn that responds
+  // to the current state (so it never answers stale messages or posts out of order).
+  // A directly-addressed message uses the shorter window (respond promptly).
+  convSettleMs: num("CONV_SETTLE_MS", 1500),
+  convSettleAddressedMs: num("CONV_SETTLE_ADDRESSED_MS", 500),
+  // Cheap/fast model that decides engagement (respond / react / ignore) for messages
+  // that aren't a structural fast-path (@-mention / reply-to-bot / DM). It handles ALL
+  // addressing judgment — name in any spelling, implicit address, worth-chiming-in —
+  // so there's no name matcher. The full chat model only runs when it says respond.
+  gridGateModel: process.env.GRID_GATE_MODEL ?? "gpt-oss-20b",
   // Hard ceiling on a single agent turn. If a grid worker stalls mid-stream the turn
   // is aborted so it can't hang forever (generous, to allow slow image gen).
   turnTimeoutMs: num("TURN_TIMEOUT_MS", 120000),

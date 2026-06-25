@@ -7,14 +7,19 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 
 ## Ownership
 
-- `index.ts` — Discord client + `MessageCreate`/reaction handlers. Per message: store
-  history (mentions resolved to readable names via `renderMentions`) → `!`commands → scam
-  screen → mechanical eligibility (channel/cooldown/ceiling) → **burst-debounce** (coalesce a
-  multi-message thought) → build the per-turn **Discord surface** (`reply`/`react`/
-  `reply_in_thread`/poll callbacks that post, attach images, persist) → `runTurn`. Turns run
-  independently (NOT serialized per channel — a slow turn must never block the room); `runTurn`
-  is hard-timeout-aborted (`TURN_TIMEOUT_MS`) so a stalled grid call can't hang. No content
-  gating — the model decides whether/how to engage. Housekeeping timers + reaction vote tallying.
+- `index.ts` — Discord client + `MessageCreate`/reaction handlers. **Conversation coalescing:
+  ONE attention per channel.** Per-message ingestion (store history w/ mentions resolved →
+  `!`commands → scam screen → eligibility → compute signals) feeds `noteActivity`; a short
+  settle timer (`CONV_SETTLE_MS`, shorter when addressed) then runs **one** `runChannelTurn`
+  per channel (serialized; re-runs if activity arrived during it), responding to the channel's
+  *current* state — so it structurally can't answer stale messages or post out of order.
+  `runChannelTurn` first checks the **engagement gate** (`discord/gate.ts`, cheap model →
+  respond/react/ignore) for non-fast-path messages — @-mention/reply/DM skip it and always
+  respond. Only on `respond` does it build the per-turn **Discord surface** (`reply`/`react`/
+  `reply_in_thread`/polls/`snooze`/presence/nickname/`create_poll`/`remind`) and call `runTurn`
+  (hard-timeout-aborted via `TURN_TIMEOUT_MS`). Posted text is run through `unwrapToolCallText`
+  (models sometimes emit a reply as literal JSON). Reminder-delivery + housekeeping timers +
+  reaction vote tallying.
 - `agent.ts` — `runTurn`: builds the persona prompt + per-turn context (who/where/history +
   how the message relates to the bot), constructs the pi `Agent`, registers tools (Discord
   actions + skills), applies human-sounding sampling (`onPayload`). Returns `finalText` only

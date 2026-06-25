@@ -1,18 +1,23 @@
-# src/discord — mechanical backstops + moderation (off the LLM path)
+# src/discord — ingestion gate + mechanical backstops + moderation
 
 ## Purpose
 
-The non-AI parts of ingestion: mechanical cost/abuse limits, the deterministic scam screen,
-the community-vote moderation engine, and `!` commands. The *decision* of whether/how to
-engage is NOT here — it's the agent's (see `../agent.ts`); this layer only provides safety
-limits plus the machinery the agent's moderation tools and the scam screen both drive.
+The pre-agent layer: the cheap engagement **gate** (an LLM, but a small fast one), mechanical
+cost/abuse limits, the deterministic scam screen, the community-vote moderation engine, and
+`!` commands. Whether/how to engage is decided by the gate (for non-fast-path messages) or
+structurally (@-mention / reply / DM always respond); the full chat agent (`../agent.ts`)
+only runs when there's a reply to make.
 
 ## Ownership
 
-- `gating.ts` — mechanical backstops ONLY, no content reads: `isCommand`, per-user
-  `passCooldown`, rolling per-minute reply ceiling (`recordBotSend`/`canSend`), and
-  `botSpokeRecently` (a context signal the model is shown). All in-memory maps. (The old
-  `decideEngagement`/`isAddressed`/`isDismissal` regex is gone — the model decides.)
+- `gate.ts` — `decideEngagement`: a cheap `gridGateModel` (gpt-oss-20b) call that returns
+  `respond` | `react <emoji>` | `ignore` for messages that aren't a structural fast-path. It
+  handles ALL addressing judgment — the bot's name in ANY spelling/form, implicit address,
+  and whether unaddressed chatter is worth chiming into — so there is **no name matcher**.
+  Fails CLOSED (ignore) on any error/8s timeout. The full agent runs only on `respond`.
+- `gating.ts` — mechanical backstops, no content reads: `isCommand`, rolling per-minute reply
+  ceiling (`recordBotSend`/`canSend`), `botSpokeRecently` (the gate's "engaged recently" signal).
+  All in-memory maps. (The old regex `decideEngagement`/`isAddressed` is gone — the gate decides.)
 - `scam.ts` — deterministic, **fail-closed** scam screen (`screenMessage`): foreign Discord
   invites, or wallet-drainer phrasing + an untrusted link. Trust by registered host (real
   URL parse, never substring). **Community-vote engine** `openModerationVote` (+ `openBanVote`
@@ -25,8 +30,8 @@ limits plus the machinery the agent's moderation tools and the scam screen both 
 
 ## Local Contracts
 
-- This layer is deterministic and must not invoke the agent. It reads no message content to
-  decide engagement (only `screenMessage` inspects content, for the fail-closed scam screen).
+- Only `gate.ts` may call an LLM here, and only the cheap `gridGateModel` — never the full
+  chat agent (that's `index.ts` → `agent.ts`, on `respond`). The gate fails closed (ignore).
 - Fail-safe defaults: the scam screen fails closed; all moderation (scam OR agent-proposed)
   resolves via human vote, never unilaterally — the bot never self-votes.
 - Cost/abuse backstops (`userCooldownMs`, `maxRepliesPerMin`, `selfThrottleMs`) come from

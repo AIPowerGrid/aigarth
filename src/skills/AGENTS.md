@@ -11,8 +11,10 @@ registers them per turn.
 - `discordActions.ts` — the bot's Discord participation as tools, backed by per-turn
   callbacks (`DiscordActions`) supplied by `index.ts`: `reply` (the real chat message —
   free text is NOT sent), `reply_in_thread`, `start_ban_poll` / `start_delete_poll`
-  (community votes, only enacted by human ✅; registered only when `canModerate`). `react`
-  lives in `react.ts`. This is how the model speaks/acts; silence = calling none of them.
+  (community votes, only enacted by human ✅; registered only when `canModerate`), `snooze`
+  (mute self in-channel — the coalescer checks `snoozedUntil`), `set_presence`, `set_nickname`
+  (guild-only), `create_poll` (native Discord poll), `remind` (persisted; delivered by a timer
+  in `index.ts`). `react` lives in `react.ts`. This is how the model acts; silence = none of them.
 - `generateImage.ts` — `generate_image`: Grid `/v1/images/generations`, driven by the
   `images/` registry; URL returned via `details.images`.
 - `remixImage.ts` — `remix_image`: img2img on the Horde client (`images/gridImage.ts`);
@@ -22,7 +24,10 @@ registers them per turn.
   `cryptoChart.ts` — `crypto_chart` (QuickChart image via `details.images`).
 - `gridStatus.ts` — `grid_status`: live worker/queue/model stats (horde status host).
 - `linkPreview.ts` — `fetch_link_preview` (OG preview). `readWebpage.ts` — `read_webpage`
-  (full page text). Both SSRF-guarded + untrusted-fenced.
+  (full page text). `webSearch.ts` — `web_search` (DuckDuckGo HTML via the SSRF-guarded
+  fetch; no API key). All three SSRF-guarded + untrusted-fenced.
+- `mood.ts` — `set_mood` (own vibe, persisted in `settings`, shown in context) + `set_chattiness`
+  (self-tune the unaddressed chime-in dial). `getMood()` is read by `agent.ts` contextBlock.
 - `vision.ts` — `describe_image`: separate `GRID_VISION_MODEL`; SSRF-guarded, MIME-sniffed.
   Registered only when a vision model is configured.
 - `channelStatus.ts` — `set_channel_status` (writes `store/db.ts` channel status).

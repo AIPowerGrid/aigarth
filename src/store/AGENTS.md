@@ -10,7 +10,8 @@ settings, persisted moderation votes, and local per-user memory. Replaces the le
 
 - `db.ts` — the single DB handle + schema (WAL, busy_timeout, foreign_keys) and the
   exported APIs: `messages` (history; `formatRecent` inserts a relative-time marker on
-  big gaps), `channelStatus`, `settings`, `userMemory`, `banVotes`. Exposes `db`.
+  big gaps), `channelStatus`, `settings` (incl. chattiness + `mood`), `userMemory`,
+  `reminders` (persisted; a timer in `index.ts` delivers due ones), `banVotes`. Exposes `db`.
 
 ## Local Contracts
 
