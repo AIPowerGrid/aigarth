@@ -17,7 +17,7 @@ export interface GateDecision {
   emoji?: string;
 }
 
-function parseVerdict(s: unknown): GateDecision | null {
+export function parseVerdict(s: unknown): GateDecision | null {
   if (!s) return null;
   const u = String(s).toUpperCase();
   const m = u.match(/REACT\s*([\p{Emoji}‍️]+)/u);
@@ -56,11 +56,12 @@ export async function decideEngagement(opts: {
               `You are the attention filter for ${bot}, a friendly member of the AI Power Grid ` +
               `Discord. Decide how ${bot} should treat the LATEST message given the recent chat. ` +
               `Answer with EXACTLY one of:\n` +
-              `RESPOND — anyone is talking TO ${bot}: using its name in ANY spelling/form (e.g. ` +
-              `"${bot}", "ai garth", "garth", typos), @-mentioning it, replying to it, asking it ` +
-              `something, or clearly directing a message at it. ALSO RESPOND to an unaddressed ` +
-              `message only when there's a real opening to genuinely help (an AIPG / grid / worker / ` +
-              `crypto / tech question that needs answering, or someone clearly stuck).\n` +
+              `RESPOND if EITHER is true:\n` +
+              `  (a) someone is talking TO ${bot} — its name in ANY spelling/form ("${bot}", ` +
+              `"ai garth", "garth", typos), an @-mention, a reply to it, or a message clearly aimed at it;\n` +
+              `  (b) the LATEST message is a genuine QUESTION or request for help ${bot} could answer — ` +
+              `ESPECIALLY about AIPG, the grid, workers, rewards, nodes, running a node, crypto, or tech — ` +
+              `EVEN IF not addressed to ${bot}. An unanswered question someone needs help with is ALWAYS RESPOND.\n` +
               `REACT <emoji> — RARELY, only for a genuinely notable social moment (a real ` +
               `celebration, a joke that truly lands, someone thanking ${bot} directly). Never just ` +
               `to acknowledge a message.\n` +
@@ -69,8 +70,9 @@ export async function decideEngagement(opts: {
                   `can inspect it — if it's a scam / phishing / drainer / giveaway bait it should open a ` +
                   `ban poll; a normal link from a regular member is fine to leave alone.\n`
                 : ``) +
-              `IGNORE — the DEFAULT. Ordinary chatter between other people, small talk, or anything ` +
-              `not meant for ${bot}. Most messages that don't address ${bot} are IGNORE.\n` +
+              `IGNORE — ordinary chatter, statements, jokes, and small talk BETWEEN PEOPLE that are ` +
+              `NOT a question or request ${bot} could help with, and not aimed at ${bot}. This is the ` +
+              `default for non-questions — but NEVER ignore a genuine question (rule b above).\n` +
               `CREDIT CHECK: thanks/praise/comments are often for whoever ACTUALLY helped — and ` +
               `${bot}'s own past lines in the chat are tagged "(you)". If someone says "thank you" / ` +
               `"nice" and ${bot} did NOT visibly help them in the recent chat, it's meant for someone ` +

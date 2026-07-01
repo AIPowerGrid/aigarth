@@ -90,9 +90,14 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
 
 ## Verification
 
-- `npm run typecheck` (tsc, no emit) — the primary gate; there is no test suite yet.
+- `npm run typecheck` (tsc, no emit) — the fast gate.
+- `npm test` — hermetic unit tests (`node:test`, `*.test.ts`): the coalescer state
+  machine, text/parse helpers, gate verdict parsing, scam screen. No network/secrets.
+- `npm run eval` — scores the engagement **gate** (respond/react/ignore) against labeled
+  fixtures on the live grid; add a case when a real misfire appears. Bump `PROMPT_VERSION`
+  (`src/prompts.ts`) when you change the persona or gate prompt, then re-run.
+- `npm run smoke` — `src/smoke.ts` build-and-run end-to-end check through the grid.
 - `npm run build` then `npm start` (needs `DISCORD_TOKEN` + `GRID_API_KEY` in `.env`).
-- `npm run smoke` — `src/smoke.ts` build-and-run smoke check.
 
 ## Child DOX Index
 

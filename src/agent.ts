@@ -19,7 +19,6 @@ import { makeRemixImageTool } from "./skills/remixImage.js";
 import { makeReactTool } from "./skills/react.js";
 import {
   type DiscordActions,
-  makeReplyTool,
   makeThreadReplyTool,
   makeBanPollTool,
   makeDeletePollTool,
@@ -76,14 +75,15 @@ function personaPrompt(): string {
     "Images/charts you create are posted automatically as attachments — NEVER write",
     "markdown image embeds or attachment:// links; just talk about the image in words.",
     "",
-    "HOW YOU ACT — everything you do in the channel is a tool call:",
-    "- To SAY something, call `reply`. Text you write outside a tool call is private",
-    "  scratch that NO ONE sees — if you don't call `reply`, you said nothing.",
-    "- CRUCIAL: tool RESULTS are private to you too. crypto_price, search_coin,",
-    "  read_doc/grep_docs, grid_status, read_webpage, recall — they hand data to YOU;",
-    "  the user sees NOTHING until you call `reply`. After ANY lookup, you MUST call",
-    "  `reply` with the answer in your own words. NEVER end your turn right after a",
-    "  lookup — that leaves the person who asked staring at silence.",
+    "HOW YOU ACT:",
+    "- To SAY something, just WRITE IT as your normal reply — your message text is",
+    "  posted to the channel. You don't call a tool to talk; you just talk.",
+    "- Tool RESULTS are private to YOU, though. crypto_price, search_coin, read_doc/",
+    "  grep_docs, grid_status, read_webpage, recall — they hand data to you; the user",
+    "  sees nothing until you write it up. After a lookup, always tell them what you",
+    "  found in your reply — never end a turn right after a lookup with no message.",
+    "- Other actions ARE tools: `react`, `reply_in_thread`, the moderation polls, image",
+    "  gen, memory, etc. Use those tools; but plain replying is just writing text.",
     "- `react` drops a single emoji. Use it RARELY — only for a genuinely notable",
     "  moment (a real celebration, a joke that truly lands, someone thanking YOU). Do",
     "  NOT react just to acknowledge a message or to seem present — reacting to most",
@@ -169,8 +169,8 @@ function buildTools(ctx: TurnContext): AgentTool[] {
   const tags = () => [`user:${ctx.userId}`, `channel:${ctx.channelId}`];
   const chanCtx = () => ({ channelId: ctx.channelId, channelName: ctx.channelName });
   const tools = [
-    // Discord participation — speaking/reacting/threads are tools the model chooses.
-    makeReplyTool(ctx.actions),
+    // Discord participation. Plain replying is NOT a tool — the model's message text
+    // is posted directly. React / thread ARE tools it chooses.
     makeReactTool(ctx.actions.react, () => {}),
     makeThreadReplyTool(ctx.actions),
     // Capabilities (skills).
@@ -297,7 +297,7 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
   let spoke = false; // did the model produce any user-facing output (reply/react/post)?
   const images: string[] = [];
   const SPEAKING = new Set([
-    "reply", "reply_in_thread", "react", "create_poll", "start_ban_poll", "start_delete_poll",
+    "reply_in_thread", "react", "create_poll", "start_ban_poll", "start_delete_poll",
   ]);
 
   agent.subscribe((event: any) => {
@@ -354,7 +354,7 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
       log.info("empty turn — nudging the model to reply", { channel: ctx.channelId });
       await agent.prompt(
         "You ended your turn without saying anything, but the person is waiting on a reply. " +
-          "Reply NOW: call the reply tool with a genuine, helpful answer to the latest message.",
+          "Now write a genuine, helpful answer to the latest message as your reply.",
       );
     }
   } catch {
