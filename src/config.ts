@@ -75,8 +75,14 @@ export const config = {
   // Local state DB (better-sqlite3): history, channel status, settings, votes.
   dbPath: process.env.STATE_DB_PATH ?? "./aigarth.db",
 
+  // Health/supervision: the bot writes a heartbeat file (an external watchdog reads
+  // it to catch a full event-loop hang), and self-exits if the gateway stays
+  // unhealthy this long so the supervisor (launchd) restarts it with a fresh socket.
+  heartbeatPath: process.env.HEARTBEAT_PATH ?? "./aigarth.heartbeat",
+  watchdogUnreadyMs: num("WATCHDOG_UNREADY_MS", 120000),
+
   // Behavior
-  historyWindow: num("HISTORY_WINDOW", 10),
+  historyWindow: num("HISTORY_WINDOW", 20),
   // Per-user cooldown between agent runs (ms) — pure cost/abuse control, NOT a
   // content decision (whether/how to engage is the model's call).
   userCooldownMs: num("USER_COOLDOWN_MS", 4000),

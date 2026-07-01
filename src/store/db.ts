@@ -130,9 +130,10 @@ export const messages = {
   recent(channelId: string, limit: number): StoredMessage[] {
     return (selRecent.all(channelId, limit) as StoredMessage[]).reverse(); // chronological
   },
-  /** Format the last `limit` messages as a transcript for prompt context, with a
-   *  relative-time marker inserted whenever there's a big gap so the model can tell
-   *  a continuous conversation from one resuming hours later. */
+  /** Format the last `limit` messages as a transcript for prompt context. The bot's
+   *  OWN past messages are marked "(you)" so it clearly recognizes what it already
+   *  said and who it is in the conversation. A relative-time marker is inserted on
+   *  big gaps so it can tell a continuous chat from one resuming hours later. */
   formatRecent(channelId: string, limit: number): string {
     const rows = this.recent(channelId, limit);
     if (rows.length === 0) return "";
@@ -140,7 +141,8 @@ export const messages = {
     let prevTs = 0;
     for (const m of rows) {
       if (prevTs && m.ts - prevTs > 10 * 60_000) out.push(`  ⋯ (${ago(m.ts - prevTs)} later)`);
-      out.push(`${m.author_name}: ${m.content}`);
+      const who = m.is_bot ? `${m.author_name} (you)` : m.author_name;
+      out.push(`${who}: ${m.content}`);
       prevTs = m.ts;
     }
     return out.join("\n");

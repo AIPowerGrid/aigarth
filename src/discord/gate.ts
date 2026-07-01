@@ -34,6 +34,7 @@ export async function decideEngagement(opts: {
   userName: string;
   recentlyEngaged: boolean;
   chattiness: number;
+  untrustedLink?: boolean;
 }): Promise<GateDecision> {
   if (!config.gridApiKey) return { action: "ignore" };
   const bot = config.botName;
@@ -63,13 +64,24 @@ export async function decideEngagement(opts: {
               `REACT <emoji> — RARELY, only for a genuinely notable social moment (a real ` +
               `celebration, a joke that truly lands, someone thanking ${bot} directly). Never just ` +
               `to acknowledge a message.\n` +
+              (opts.untrustedLink
+                ? `SECURITY: this message posts a link to an UNRECOGNIZED site. Choose RESPOND so ${bot} ` +
+                  `can inspect it — if it's a scam / phishing / drainer / giveaway bait it should open a ` +
+                  `ban poll; a normal link from a regular member is fine to leave alone.\n`
+                : ``) +
               `IGNORE — the DEFAULT. Ordinary chatter between other people, small talk, or anything ` +
               `not meant for ${bot}. Most messages that don't address ${bot} are IGNORE.\n` +
+              `CREDIT CHECK: thanks/praise/comments are often for whoever ACTUALLY helped — and ` +
+              `${bot}'s own past lines in the chat are tagged "(you)". If someone says "thank you" / ` +
+              `"nice" and ${bot} did NOT visibly help them in the recent chat, it's meant for someone ` +
+              `else → IGNORE. Never make ${bot} take credit or butt into other people's exchange.\n` +
               (opts.recentlyEngaged
-                ? `${bot} engaged here very recently — lean even harder toward IGNORE unless it's directly addressed. `
+                ? `${bot} is in an ACTIVE exchange here (it spoke recently) — KEEP answering questions ` +
+                  `and continuing that conversation, including direct follow-ups. Only skip unrelated ` +
+                  `idle chatter; never drop a genuine question just because ${bot} just spoke. `
                 : ``) +
               `Chattiness is ${opts.chattiness}/10 (higher = a little more willing to chime into ` +
-              `unaddressed chatter; it never changes responding when directly addressed).`,
+              `unaddressed chatter; it never changes responding when directly addressed or asked a question).`,
           },
           {
             role: "user",

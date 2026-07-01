@@ -18,7 +18,7 @@ import { log } from "./util/log.js";
 import { messages, banVotes, settings, reminders } from "./store/db.js";
 import { isCommand, canSend, recordBotSend, botSpokeRecently } from "./discord/gating.js";
 import { handleCommand } from "./discord/commands.js";
-import { screenMessage, openBanVote, openModerationVote, handleVoteReaction } from "./discord/scam.js";
+import { screenMessage, hasUntrustedLink, openBanVote, openModerationVote, handleVoteReaction } from "./discord/scam.js";
 import { decideEngagement } from "./discord/gate.js";
 import type { DiscordActions } from "./skills/discordActions.js";
 import { runTurn } from "./agent.js";
@@ -58,6 +58,7 @@ interface Activity {
   repliedToBot: boolean;
   isDM: boolean;
   addressed: boolean;
+  untrustedLink: boolean;
   imageUrls: string[];
 }
 interface ChanState {
@@ -139,8 +140,14 @@ async function runChannelTurn(channelId: string): Promise<void> {
         userName: message.author.displayName ?? message.author.username,
         recentlyEngaged: botSpokeRecently(channelId),
         chattiness: settings.getChattiness(),
+        untrustedLink: act.untrustedLink,
       });
-      log.info("gate", { ch: channelId, action: decision.action, emoji: decision.emoji });
+      log.info("gate", {
+        ch: channelId,
+        action: decision.action,
+        emoji: decision.emoji,
+        text: act.content.slice(0, 100),
+      });
       if (decision.action === "ignore") return;
       if (decision.action === "react") {
         try {
@@ -489,6 +496,9 @@ client.on(Events.MessageCreate, async (message) => {
     const isDM = !message.guild;
     // Structural fast-paths only — name/implicit addressing is judged by the gate later.
     const addressed = mentioned || repliedToBot || isDM;
+    // A link to an unrecognized host (guild only — ban polls need a guild) → route to
+    // aigarth's judgment so it can ban-poll a shady one.
+    const untrustedLink = !!message.guild && hasUntrustedLink(message.content);
 
     // A bare "@aigarth" (addressed, no text) is a real ping; unaddressed empty isn't.
     if (!content && message.attachments.size === 0 && !addressed) return;
@@ -500,7 +510,7 @@ client.on(Events.MessageCreate, async (message) => {
     // Hand the channel's current state to the coalescer (one attention per channel).
     noteActivity({
       message, inTracked, content, priorHistory, modTarget,
-      mentioned, repliedToBot, isDM, addressed, imageUrls,
+      mentioned, repliedToBot, isDM, addressed, untrustedLink, imageUrls,
     });
   } catch (err) {
     log.error("ingest error", { err: String(err) });

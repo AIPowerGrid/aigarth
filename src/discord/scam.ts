@@ -57,6 +57,15 @@ export interface ScamVerdict {
   reason: string;
 }
 
+/** Does the message contain a link to a host NOT on the trusted allowlist? Used to
+ *  route link posts to aigarth's judgment so it can ban-poll a shady one (a normal
+ *  link from a regular isn't necessarily bad — the LLM decides). */
+export function hasUntrustedLink(content: string): boolean {
+  return extractUrls(content)
+    .map(hostOf)
+    .some((h): h is string => !!h && !isTrusted(h));
+}
+
 /** Deterministic screen. Fails closed (no signal → not flagged). */
 export function screenMessage(content: string): ScamVerdict {
   const lower = content.toLowerCase();

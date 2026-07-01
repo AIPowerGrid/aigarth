@@ -60,7 +60,10 @@ function personaPrompt(): string {
     "- For factual AIPG questions (tokenomics, rewards, the grid, contracts, workers),",
     "  read the relevant doc with read_doc (or grep_docs if unsure which). Doc index:",
     docIndex().split("\n").map((l) => "  " + l).join("\n"),
-    "- recall when the user references something personal/past; remember durable facts.",
+    "- Get to know people: when you learn something durable about someone (what",
+    "  they're building, their worker/node setup, their role, a real preference),",
+    "  actually call `remember` — you'll see what you know about them next time. Use",
+    "  `recall` when they reference something personal/past.",
     "- generate_image when someone wants a picture (pick a fitting model/style).",
     "- crypto_price/search_coin for prices; crypto_chart for trends; grid_status for the network.",
     "- web_search for current/factual things you don't know (news, events, people,",
@@ -92,6 +95,9 @@ function personaPrompt(): string {
     "HOW TO RESPOND — a separate filter already decided this message is worth your",
     "attention, so your job is to respond well; you rarely need to stay silent:",
     "- Reply naturally and actually answer them, like a friend. Match their length.",
+    "- Track who said what — lines tagged \"(you)\" are YOUR own past messages. If a",
+    "  thanks or compliment is really for someone else who helped (you didn't), stay",
+    "  out of it — don't say \"anytime!\" or take credit for an answer you didn't give.",
     "- A react (single emoji) is only a RARE bonus for a genuinely notable moment —",
     "  never instead of answering a real question, never just to acknowledge.",
     "- Stay silent (call no tool) ONLY in the rare case the message clearly isn't",
@@ -99,8 +105,8 @@ function personaPrompt(): string {
     "  then go silent and do NOT acknowledge it (no \"ok, I'll step back\", no 🙏).",
     "",
     "KEEPING THE CHANNEL SAFE — community-decided, never by you alone:",
-    "- For a clear scam, raid, wallet-drainer link, or seriously abusive user, you can",
-    "  open a community poll: `start_ban_poll` (ban the user) or `start_delete_poll`",
+    "- For a clear scam, raid, phishing / shady link, wallet-drainer, giveaway-bait, or",
+    "  seriously abusive user, OPEN A POLL: `start_ban_poll` (ban the user) or `start_delete_poll`",
     "  (remove the message). It only happens if enough people vote ✅ — you're",
     "  proposing, the community decides. Use it sparingly and only for obvious cases;",
     "  never to win an argument or against someone merely annoying.",
@@ -237,7 +243,7 @@ function contextBlock(ctx: TurnContext): string {
       ? `What you know about ${ctx.userName} (${ctx.userId}):${known.map((f) => `\n  - ${f}`).join("")}`
       : "",
     ctx.spokeRecently ? "You spoke here recently — don't pile on unless you're actually needed." : "",
-    history ? `\nRecent messages (oldest→newest):\n${history}` : "",
+    history ? `\nRecent messages (oldest→newest; lines tagged "(you)" are YOUR own past messages):\n${history}` : "",
     ctx.imageUrls && ctx.imageUrls.length
       ? `\n${ctx.userName} attached image(s) — call describe_image (or remix_image) on a URL to use one:\n${ctx.imageUrls.join("\n")}`
       : "",
@@ -288,7 +294,11 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
 
   let text = "";
   let error = false;
+  let spoke = false; // did the model produce any user-facing output (reply/react/post)?
   const images: string[] = [];
+  const SPEAKING = new Set([
+    "reply", "reply_in_thread", "react", "create_poll", "start_ban_poll", "start_delete_poll",
+  ]);
 
   agent.subscribe((event: any) => {
     switch (event.type) {
@@ -305,6 +315,7 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
           args: JSON.stringify(event.args ?? {}).slice(0, 300),
           channel: ctx.channelId,
         });
+        if (SPEAKING.has(event.toolName)) spoke = true;
         ctx.onToolStart?.(event.toolName);
         break;
       }
@@ -336,6 +347,16 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
   }, config.turnTimeoutMs);
   try {
     await agent.prompt(contextBlock(ctx));
+    // Forced-reply backstop: runTurn is only called when we intend to respond, so if
+    // the model ended its turn having said NOTHING (no reply/react, no text — a known
+    // gpt-oss quirk), nudge it once to actually answer instead of dropping the inquiry.
+    if (!spoke && !text.trim()) {
+      log.info("empty turn — nudging the model to reply", { channel: ctx.channelId });
+      await agent.prompt(
+        "You ended your turn without saying anything, but the person is waiting on a reply. " +
+          "Reply NOW: call the reply tool with a genuine, helpful answer to the latest message.",
+      );
+    }
   } catch {
     error = true;
   } finally {
