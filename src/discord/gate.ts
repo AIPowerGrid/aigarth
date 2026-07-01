@@ -45,8 +45,13 @@ export async function decideEngagement(opts: {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.gridApiKey}` },
       body: JSON.stringify({
+        // Grid models are REASONING models: they spend tokens thinking before the
+        // verdict, so a tight cap makes them emit empty content (0 tokens) — which the
+        // grid counts as a FAILED generation and evicts the worker. Give room to think
+        // + answer; reasoning_effort=low keeps it short. The verdict is parsed from
+        // content OR reasoning_content, so either way we get it.
         model: config.gridGateModel,
-        max_tokens: 64,
+        max_tokens: 512,
         temperature: 0,
         reasoning_effort: "low",
         messages: [
