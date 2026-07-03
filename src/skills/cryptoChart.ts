@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { cgGet } from "./crypto.js";
+import { cgGet, cleanArg } from "./crypto.js";
 
 /**
  * crypto_chart — a candlestick price chart (with a volume overlay) as an image,
@@ -69,10 +69,10 @@ export function makeCryptoChartTool(): AgentTool {
       type: Type.Optional(Type.String({ description: "'candlestick' (default) or 'line'." })),
     }),
     execute: async (_id, params: any, signal) => {
-      const id = String(params.coin_id).toLowerCase().trim();
-      const tf = String(params.timeframe ?? "30d").toLowerCase().trim();
+      const id = cleanArg(params.coin_id, true).toLowerCase();
+      const tf = (cleanArg(params.timeframe, true) || "30d").toLowerCase();
       const days = TIMEFRAMES[tf] ?? (Number(tf) > 0 ? Math.min(365, Math.round(Number(tf))) : 30);
-      const wantLine = String(params.type ?? "candlestick").toLowerCase() === "line";
+      const wantLine = cleanArg(params.type, true).toLowerCase() === "line";
 
       // OHLC candles + volume series (separate CoinGecko endpoints).
       const [ohlcRaw, mc] = await Promise.all([

@@ -19,6 +19,17 @@ function keyHeaders(): Record<string, string> {
   return { [config.coingeckoPro ? "X-Cg-Pro-Api-Key" : "X-Cg-Demo-Api-Key"]: config.coingeckoApiKey };
 }
 
+/** Strip tool-call junk some models leak into string args — stray XML-ish tags
+ *  (e.g. qwen emitting `bitcoin\n</parameter>`), quotes, backticks — leaving a clean
+ *  value. `singleToken` keeps only the first whitespace-delimited token (for ids). */
+export function cleanArg(s: unknown, singleToken = false): string {
+  const cleaned = String(s ?? "")
+    .replace(/<\/?[a-z_][\w-]*>/gi, "") // <parameter>, </parameter>, <tool_call> …
+    .replace(/[`"']/g, "")
+    .trim();
+  return singleToken ? (cleaned.split(/\s+/)[0] ?? "") : cleaned;
+}
+
 export async function cgGet(path: string, signal?: AbortSignal): Promise<any> {
   const hit = cache.get(path);
   if (hit && hit.exp > Date.now()) return hit.v;
@@ -41,7 +52,7 @@ export function makeCryptoPriceTool(): AgentTool {
       coin_id: Type.String({ description: "CoinGecko coin id, e.g. 'ai-power-grid'." }),
     }),
     execute: async (_id, params: any, signal) => {
-      const id = String(params.coin_id).toLowerCase().trim();
+      const id = cleanArg(params.coin_id, true).toLowerCase();
       const data = await cgGet(
         `/simple/price?ids=${encodeURIComponent(id)}&vs_currencies=usd&include_24hr_change=true`,
         signal,
@@ -70,7 +81,7 @@ export function makeSearchCoinTool(): AgentTool {
       query: Type.String({ description: "Name or symbol, e.g. 'AIPG' or 'power grid'." }),
     }),
     execute: async (_id, params: any, signal) => {
-      const data = await cgGet(`/search?query=${encodeURIComponent(params.query)}`, signal);
+      const data = await cgGet(`/search?query=${encodeURIComponent(cleanArg(params.query))}`, signal);
       const coins = (data.coins ?? []).slice(0, 8).map((c: any) => ({
         id: c.id,
         symbol: c.symbol,
