@@ -17,8 +17,12 @@ registers them per turn.
   in `index.ts`). `react` lives in `react.ts`. This is how the model acts; silence = none of them.
 - `generateImage.ts` — `generate_image`: Grid `/v1/images/generations`, driven by the
   `images/` registry; URL returned via `details.images`.
-- `remixImage.ts` — `remix_image`: img2img on the Horde client (`images/gridImage.ts`);
-  SSRF-guarded source fetch.
+- `remixImage.ts` — `remix_image`: img2img on a source URL, and `remixLast.ts` —
+  `remix_last_image`: edit the image aigarth last made in the channel (no URL — uses
+  `images/lastImage.ts`, and chains). Both go through `images/edit.ts` (`img2img` on the
+  grid `/v1` with FLUX.2 Klein + `image` data-URI + `strength`; the legacy Horde path in
+  `images/gridImage.ts` is retired). generate_image + remix record the result as the
+  channel's "last image". SSRF-guarded source fetch.
 - `docs.ts` — `read_doc` / `grep_docs` / `list_docs` over `docs/store.ts`.
 - `crypto.ts` — `crypto_price` / `search_coin` (CoinGecko, structured + cached).
   `cryptoChart.ts` — `crypto_chart` (QuickChart image via `details.images`).

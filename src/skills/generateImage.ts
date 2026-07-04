@@ -19,7 +19,9 @@ import {
  *
  * The image URL rides in details.images so the Discord layer posts it.
  */
-export function makeGenerateImageTool(): AgentTool {
+/** @param record called with the result URL so it becomes this channel's "last
+ *  image" (editable via remix_last_image). */
+export function makeGenerateImageTool(record: (url: string) => void): AgentTool {
   return {
     name: "generate_image",
     label: "Generate Image",
@@ -76,6 +78,7 @@ export function makeGenerateImageTool(): AgentTool {
         .map((d: any) => d.url)
         .filter((u: any): u is string => typeof u === "string" && u.length > 0);
       if (images.length === 0) throw new Error("no image came back from the grid");
+      record(images[0]); // remember it so "edit the last image" works
 
       return {
         content: [

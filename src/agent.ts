@@ -1,8 +1,9 @@
 import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
 import { gridModel } from "./grid.js";
 import { config } from "./config.js";
-import { GridImageClient } from "./images/gridImage.js";
+import { setLastImage, getLastImage } from "./images/lastImage.js";
 import { makeGenerateImageTool } from "./skills/generateImage.js";
+import { makeRemixLastImageTool } from "./skills/remixLast.js";
 import { makeReadDocTool, makeGrepDocsTool, makeListDocsTool } from "./skills/docs.js";
 import { docIndex } from "./docs/store.js";
 import { makeCryptoPriceTool, makeSearchCoinTool } from "./skills/crypto.js";
@@ -31,7 +32,6 @@ import {
 import { messages, channelStatus, userMemory } from "./store/db.js";
 import { log } from "./util/log.js";
 
-const imageClient = new GridImageClient({ apiKey: config.gridImageApiKey, baseUrl: config.gridImageBaseUrl });
 
 // Stable, persona-only system prompt (separated from per-turn context per audit).
 function personaPrompt(): string {
@@ -174,8 +174,9 @@ function buildTools(ctx: TurnContext): AgentTool[] {
     makeReactTool(ctx.actions.react, () => {}),
     makeThreadReplyTool(ctx.actions),
     // Capabilities (skills).
-    makeGenerateImageTool(),
-    makeRemixImageTool(imageClient),
+    makeGenerateImageTool((url) => setLastImage(ctx.channelId, url)),
+    makeRemixImageTool((url) => setLastImage(ctx.channelId, url)),
+    makeRemixLastImageTool(ctx.channelId),
     makeReadDocTool(),
     makeGrepDocsTool(),
     makeListDocsTool(),
@@ -243,6 +244,9 @@ function contextBlock(ctx: TurnContext): string {
       ? `What you know about ${ctx.userName} (${ctx.userId}):${known.map((f) => `\n  - ${f}`).join("")}`
       : "",
     ctx.spokeRecently ? "You spoke here recently — don't pile on unless you're actually needed." : "",
+    getLastImage(ctx.channelId)
+      ? "You have a recent image in this channel — if someone says 'that but with…' / 'give me that image with…', edit it with remix_last_image (no URL needed)."
+      : "",
     history ? `\nRecent messages (oldest→newest; lines tagged "(you)" are YOUR own past messages):\n${history}` : "",
     ctx.imageUrls && ctx.imageUrls.length
       ? `\n${ctx.userName} attached image(s) — call describe_image (or remix_image) on a URL to use one:\n${ctx.imageUrls.join("\n")}`

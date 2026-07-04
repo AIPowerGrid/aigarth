@@ -1,58 +1,40 @@
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { GridImageClient } from "../images/gridImage.js";
-import { resolveImageParams } from "../images/registry.js";
-import { safeFetchBuffer } from "../util/net.js";
+import { img2img } from "../images/edit.js";
+import { cleanArg } from "./crypto.js";
 
 /**
- * remix_image — img2img on FLUX.2 Klein (the img2img-capable model the grid
- * serves). Takes a source image (URL, e.g. an attachment shown in context) +
- * a prompt describing the change, and posts the remixed result.
+ * remix_image — img2img on a source image URL (an attachment someone shared, shown
+ * in context). Rebuilt on the grid's /v1 endpoint (the legacy Horde path is retired).
+ * For editing the image aigarth ITSELF last made, prefer remix_last_image (no URL).
  *
- * `strength` is the denoising strength: lower = closer to the original, higher
- * = follows the prompt more. SSRF-guarded source fetch + size cap.
+ * @param record called with the result URL so it becomes this channel's "last image".
  */
-
-const KLEIN = "flux.2 klein 4b fp8";
-
-export function makeRemixImageTool(client: GridImageClient): AgentTool {
+export function makeRemixImageTool(record: (url: string) => void): AgentTool {
   return {
     name: "remix_image",
     label: "Remix Image (img2img)",
     description:
-      "Transform an existing image with a prompt (img2img) on FLUX.2 Klein and " +
-      "post the result. Use when the user shares an image and wants it changed/" +
-      "restyled ('make this anime', 'add a sunset'). Provide the image URL.",
+      "Transform an EXISTING image (given its URL — e.g. an attachment someone shared) " +
+      "with a prompt and post the result: 'make this anime', 'add a sunset'. strength " +
+      "0.2=subtle … 0.9=big change. To edit the image YOU last generated, use " +
+      "remix_last_image instead (no URL needed).",
     parameters: Type.Object({
       image_url: Type.String({ description: "URL of the source image to remix." }),
-      prompt: Type.String({ description: "How to transform it." }),
-      strength: Type.Optional(
-        Type.Number({ description: "0.2 (subtle) … 0.9 (strong). Default 0.6." }),
-      ),
-      style: Type.Optional(Type.String({ description: "Optional style preset id." })),
+      prompt: Type.String({ description: "How to transform it, in words." }),
+      strength: Type.Optional(Type.Number({ description: "0.2 (subtle) … 0.9 (strong). Default 0.6." })),
     }),
     execute: async (_id, params: any, signal) => {
-      const got = await safeFetchBuffer(params.image_url, { maxBytes: 8_000_000 });
-      if (!got) throw new Error("couldn't fetch that image (blocked, private, or too large)");
-
-      const strength = Math.max(0.1, Math.min(Number(params.strength ?? 0.6), 0.95));
-      const resolved = resolveImageParams({
-        prompt: params.prompt,
-        modelId: KLEIN, // img2img runs on Klein
-        styleId: params.style,
-        sourceImageB64: got.buf.toString("base64"),
-        denoisingStrength: strength,
+      const r = await img2img({
+        sourceUrl: cleanArg(params.image_url),
+        prompt: cleanArg(params.prompt),
+        strength: Number(params.strength),
+        signal,
       });
-
-      const result = await client.generate(resolved, 1, signal);
+      record(r.images[0]);
       return {
-        content: [
-          {
-            type: "text",
-            text: `Remixed on ${result.model} (strength ${strength}). Posting it.`,
-          },
-        ],
-        details: { images: result.images, model: result.model, strength },
+        content: [{ type: "text", text: `Remixed it (strength ${r.strength}). Posting.` }],
+        details: { images: r.images, model: r.model, strength: r.strength },
       };
     },
   };
