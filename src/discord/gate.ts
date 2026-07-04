@@ -15,6 +15,10 @@ export type GateAction = "respond" | "react" | "ignore";
 export interface GateDecision {
   action: GateAction;
   emoji?: string;
+  /** True when we fell back to "ignore" because the gate FAILED (timeout / HTTP error /
+   *  unparseable), not because it decided to ignore. Lets the caller fail OPEN on a
+   *  name-addressed message instead of silently dropping it. */
+  error?: boolean;
 }
 
 export function parseVerdict(s: unknown): GateDecision | null {
@@ -36,10 +40,10 @@ export async function decideEngagement(opts: {
   chattiness: number;
   untrustedLink?: boolean;
 }): Promise<GateDecision> {
-  if (!config.gridApiKey) return { action: "ignore" };
+  if (!config.gridApiKey) return { action: "ignore", error: true };
   const bot = config.botName;
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 8000);
+  const t = setTimeout(() => ctrl.abort(), 15000);
   try {
     const res = await fetch(`${config.gridV1Url.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
@@ -98,13 +102,13 @@ export async function decideEngagement(opts: {
       }),
       signal: ctrl.signal,
     });
-    if (!res.ok) return { action: "ignore" };
+    if (!res.ok) return { action: "ignore", error: true };
     const data = (await res.json()) as any;
     const msg = data?.choices?.[0]?.message ?? {};
-    return parseVerdict(msg.content) ?? parseVerdict(msg.reasoning_content) ?? { action: "ignore" };
+    return parseVerdict(msg.content) ?? parseVerdict(msg.reasoning_content) ?? { action: "ignore", error: true };
   } catch (e) {
     log.debug("gate error (ignoring)", { err: String(e) });
-    return { action: "ignore" };
+    return { action: "ignore", error: true };
   } finally {
     clearTimeout(t);
   }

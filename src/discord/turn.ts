@@ -54,7 +54,6 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
         untrustedLink: act.untrustedLink,
       });
       log.info("gate", { ch: channelId, action: decision.action, emoji: decision.emoji, text: act.content.slice(0, 100) });
-      if (decision.action === "ignore") return;
       if (decision.action === "react") {
         try {
           await modTarget.react(decision.emoji || "👍");
@@ -64,7 +63,18 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
         }
         return;
       }
-      // respond → fall through to the full chat agent
+      if (decision.action === "ignore") {
+        // Fail OPEN on the bot's name: if the gate FAILED (timeout/error) but the message
+        // literally uses the bot's name, respond anyway — a gate hiccup must never silently
+        // drop a name-addressed request. A genuine "ignore" verdict is still respected.
+        const named = config.botName && act.content.toLowerCase().includes(config.botName.toLowerCase());
+        if (decision.error && named) {
+          log.info("gate failed but name present — responding", { ch: channelId });
+        } else {
+          return;
+        }
+      }
+      // respond (or gate-failed-but-named) → fall through to the full chat agent
     }
 
     const startTyping = (channel: any): void => {
