@@ -55,7 +55,8 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
 
 ## Local Contracts
 
-- **Inherit org engineering standards:** /Users/j/fix-axios-vuln/aipg-documentation/engineering-standards/
+- **Inherit org engineering standards:**
+  [AIPG engineering standards](https://github.com/AIPowerGrid/aipg-documentation/tree/main/engineering-standards)
   (core + git + the matching language file).
 - **Brain = the Grid.** The agent model is the Grid's `/v1` via a custom `pi-ai` `baseUrl`
   (`src/grid.ts`); never wire in a third-party LLM provider. pi-ai resolves keys by
@@ -102,3 +103,4 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
 ## Child DOX Index
 
 - [src/AGENTS.md](src/AGENTS.md) — application code: agent loop, Grid binding, config, subsystems.
+- [docs/AGENTS.md](docs/AGENTS.md) — runtime knowledge corpus and freshness rules.
