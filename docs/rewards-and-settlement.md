@@ -1,46 +1,37 @@
-# Worker rewards & on-chain settlement
+# Worker rewards and settlement
 
-How AIPG workers get paid for the inference they serve. This is live on Base
-mainnet (the Grid diamond proxy at `0x79F39f2a0eA476f53994812e6a8f3C8CFe08c609`).
+## What is live
 
-## Den (work credit)
+Grid core records one append-only ledger row per terminal worker job. Work is
+measured as **den**, based on server-observed useful output and model policy.
+The live bootstrap payout process runs on a schedule, groups den by earning
+account, splits a fixed AIPG period budget pro-rata, and sends AIPG from a
+dedicated hot wallet to each account's configured Base payout wallet.
 
-Every completed job earns **den** — a work-credit score based on output produced
-(tokens / image steps), weighted by the model's size multiplier (bigger models
-earn more per unit). The model multiplier is sourced on-chain (ModelVault) so
-it's transparent and can't be gamed by lying about a model name. Den is recorded
-in an append-only ledger, one entry per job.
+The sender is designed to be idempotent and nonce-bound. A payout is marked sent
+only after a successful receipt contains the expected ERC-20 Transfer. Unproven
+or ambiguous transfers go to manual review. Public payout rows and BaseScan links
+are available at `https://console.aipowergrid.io/transparency`.
 
-## Settlement (ledger → Merkle → payout)
+## What is built but dark
 
-On a schedule, a settlement bot:
-1. aggregates each worker's den for the period from the ledger,
-2. builds a Merkle tree of `(wallet, den)` and pins the full list to IPFS,
-3. posts the root on-chain (`DenReporter.reportPeriod`),
-4. pays everyone via `PaymentRouter.claimBatch` — each worker's payout =
-   `workerDen / totalDen × periodAllocation`, pulled from the reward pool.
+The multi-asset pass-through design can distribute a revenue basket such as
+USDC, ETH, and AIPG without conversion. It is gated on live charging, funded
+treasury balances, and operational rollout. Do not tell workers it is their
+current payout rail.
 
-Workers don't need to do anything to get paid — the bot settles for everyone.
-Payout always goes to the wallet in the ledger leaf.
+## What is deployed but not operational
 
-## Reward pool
+RewardPool, DenReporter, and PaymentRouter facets are deployed behind the Grid
+diamond on Base. They support a future Merkle-root claim flow. The core publisher
+and worker claim operation are not live; current workers are paid by the
+custodial bootstrap sender.
 
-A **RewardPool** holds AIPG that funds payouts. It's funded by the team (and, in
-future, by usage fees). The **per-period allocation** sets how much AIPG is
-released each period; pool balance and the rate are decoupled so the pool can be
-pre-funded and drip out. As of go-live the pool is funded and a daily allocation
-is set.
+## Worker setup
 
-## Getting paid (worker operators)
+Workers authenticate with an account API key. The operator configures a Base
+payout wallet in the console. The payout wallet can differ from the login wallet;
+it is a payment destination, not proof of worker ownership.
 
-Connect a wallet once (SIWE) to get an account + API key, then run your worker
-with just that API key — no private key ever goes on the rig. Earnings accrue to
-your account's wallet and are paid out automatically each period.
-
-## Bonding & slashing (trust)
-
-Workers can bond AIPG as collateral. Misbehavior (forged result receipts,
-repeated bad output) can be **slashed**. Unbonding has a cooldown so a worker
-can't pull its bond to dodge a slash; slashed funds are redistributed to honest
-workers via the reward pool. Detection feeds an evidence queue an operator
-reviews — slashing is deliberate, never automatic from the hot path.
+Rates, period budgets, asset mix, and den multipliers can change. Use live
+console/transparency data rather than static earnings estimates.

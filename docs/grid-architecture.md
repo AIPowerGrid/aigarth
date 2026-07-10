@@ -1,40 +1,44 @@
-# AI Power Grid — current architecture (2026)
+# AI Power Grid architecture
 
-This describes the **current** Grid infrastructure. (Note: the "Base migration"
-and "bridge migration" docs are about the *token* moving chains — a separate,
-older topic. This doc is about the *inference network*.)
+## Current serving path
 
-## Two endpoints, mid-migration
+`https://api.aipowergrid.io` is the canonical Grid endpoint. The live public
+generation surface is `/v1`:
 
-The Grid is moving from a legacy stack to a new one. Both are live right now:
+- `POST /v1/chat/completions` for OpenAI-compatible text
+- `POST /v1/responses` for OpenAI Responses-compatible text
+- `POST /v1/messages` for Anthropic-compatible text
+- `POST /v1/images/generations` for images
+- `POST /v1/videos/generations` for video
+- `GET /v1/models` and `GET /v1/status/models` for current availability
 
-- **`grid.aipowergrid.io`** — the **new stack** (system-core). Serves an
-  **OpenAI-compatible `/v1`** API (chat completions, with faithful tool-calling
-  passthrough). This is what aipg.chat and aigarth use. Currently serves
-  `gpt-oss-120b`.
-- **`api.aipowergrid.io`** — the **legacy horde** (the older Flask-based system,
-  `/api/v2/...`). Most GPU workers still register here: the other text models
-  (llama, qwen, groq) and the image workers (`z-image-turbo`, `flux.2 klein`).
+The old Horde `/api/v2` submit/poll queue is retired for new integrations. The
+legacy Flask code remains in `grid-core` for compatibility and migration history,
+but it is not the architecture new clients or workers should target.
 
-So today, chat (gpt-oss) is on the new grid; the other text models and image
-generation are still on the legacy horde. They run side by side during the
-cutover.
+## Runtime flow
 
-## The plan (cutover)
+1. A user authenticates with a Grid API key and submits a `/v1` request.
+2. Grid core validates the request, applies policy and billing posture, and puts
+   a job on the queue.
+3. A compatible worker receives the job through `/v1/workers/ws`.
+4. Text streams back through the core; media workers upload to presigned storage
+   slots and return bounded result metadata.
+5. Core records the terminal job and worker den in its durable ledger.
+6. The live bootstrap payout process pays attributed worker accounts on Base.
 
-The goal is **one canonical endpoint**: point `api.aipowergrid.io/v1` at the new
-system-core, migrate the remaining workers off the legacy horde onto it, keep
-`grid.aipowergrid.io` as a temporary alias, then decommission the legacy horde.
-After that there's a single `api.aipowergrid.io/v1` (no `/api/v2`).
+## Decentralization posture
 
-## How inference works
+Workers are decentralized today; the coordinator is still an operated service.
+The validator preview adds signed, assignment-bound evidence and scorecards but
+has no reward, routing, strike, or slashing authority. Multi-core trusted partner
+nodes, quorum, disputes, and Base-anchored epoch commitments are future stages.
 
-Users submit to the Grid (chat via `/v1/chat/completions`, images via the horde
-async API). The Grid dispatches the job to a worker advertising that model; the
-worker runs it on its GPU and streams the result back. Workers earn AIPG for the
-work they do (see rewards-and-settlement).
+Hot inference stays off-chain. Base is for durable public state such as the AIPG
+token, Grid registry modules, job/reward commitments, and future stake/bonds.
 
-## API keys
+## Authentication
 
-The two stacks have **separate keys** during the migration: a `grid.` key is not
-valid on `api.` and vice-versa. Each is issued per-account by its system.
+Humans sign in to `https://console.aipowergrid.io` with Google, GitHub, or a
+wallet and create API keys. Workers authenticate with an account key. Do not use
+old Horde keys or anonymous shared keys for new integrations.

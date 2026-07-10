@@ -15,6 +15,11 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const DOCS_DIR = fileURLToPath(new URL("../../docs", import.meta.url));
+const RESERVED_DOCS = new Set(["agents.md"]);
+
+function isKnowledgeDoc(name: string): boolean {
+  return name.endsWith(".md") && !RESERVED_DOCS.has(name.toLowerCase());
+}
 
 function safeName(name: string): string {
   // Strip any path components + force .md — no traversal.
@@ -33,7 +38,7 @@ function firstHeading(md: string): string {
 export function listDocs(): Array<{ name: string; title: string }> {
   if (!existsSync(DOCS_DIR)) return [];
   return readdirSync(DOCS_DIR)
-    .filter((f) => f.endsWith(".md"))
+    .filter(isKnowledgeDoc)
     .sort()
     .map((f) => {
       let title = "";
@@ -47,7 +52,9 @@ export function listDocs(): Array<{ name: string; title: string }> {
 }
 
 export function readDoc(name: string): string | null {
-  const file = path.join(DOCS_DIR, safeName(name));
+  const safe = safeName(name);
+  if (!isKnowledgeDoc(safe)) return null;
+  const file = path.join(DOCS_DIR, safe);
   if (!existsSync(file)) return null;
   try {
     return readFileSync(file, "utf-8");
@@ -89,12 +96,16 @@ export function docIndex(): string {
 
 // ── admin doc management (used by ! commands; operates on the same dir) ──
 export function saveDoc(name: string, content: string): string {
-  const file = path.join(DOCS_DIR, safeName(name));
+  const safe = safeName(name);
+  if (!isKnowledgeDoc(safe)) throw new Error(`reserved doc name: ${safe}`);
+  const file = path.join(DOCS_DIR, safe);
   writeFileSync(file, content, "utf-8");
   return path.basename(file);
 }
 export function deleteDoc(name: string): boolean {
-  const file = path.join(DOCS_DIR, safeName(name));
+  const safe = safeName(name);
+  if (!isKnowledgeDoc(safe)) return false;
+  const file = path.join(DOCS_DIR, safe);
   if (!existsSync(file)) return false;
   unlinkSync(file);
   return true;
