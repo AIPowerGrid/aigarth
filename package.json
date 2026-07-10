@@ -5,7 +5,7 @@
   "description": "Aigarth — AI Power Grid community agent. Built on the pi agent core, running entirely on the Grid's own /v1 (dogfooding). Tools are skills: image generation, doc search.",
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -29,5 +29,8 @@
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^20.14.0",
     "typescript": "^5.6.3"
+  },
+  "overrides": {
+    "undici": "6.27.0"
   }
 }

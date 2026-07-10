@@ -87,13 +87,16 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
   `buildTools` (`src/agent.ts`); do not stuff capabilities into the system prompt.
 - Errors fail safe: a bad turn produces silence (no apology spam); the proactive gate and
   SSRF guard fail closed.
-- Requires Node 18+ (`package.json` engines) for the native better-sqlite3 build.
+- Requires Node 22.19+ (`package.json` engines), matching the pi agent-core
+  packages. `better-sqlite3` also needs a compatible prebuilt binary or native
+  build toolchain for the selected Node release.
 
 ## Verification
 
 - `npm run typecheck` (tsc, no emit) — the fast gate.
 - `npm test` — hermetic unit tests (`node:test`, `*.test.ts`): the coalescer state
   machine, text/parse helpers, gate verdict parsing, scam screen. No network/secrets.
+- `npm audit` must report zero known vulnerabilities before release.
 - `npm run eval` — scores the engagement **gate** (respond/react/ignore) against labeled
   fixtures on the live grid; add a case when a real misfire appears. Bump `PROMPT_VERSION`
   (`src/prompts.ts`) when you change the persona or gate prompt, then re-run.
