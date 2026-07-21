@@ -28,6 +28,11 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 - `config.ts` — the ONE typed env surface (`config`, `isAdmin`); defaults + `.env.template`.
 - `memory.ts` — long-term memory behind a `MemoryStore` interface; hindsight when configured,
   else a no-op (`NullMemory`). One swappable file.
+- `conversationSummary.ts` — folds messages older than the verbatim window into a
+  persisted channel summary using `GRID_SUMMARY_MODEL`; one refresh per channel.
+- `memoryExtraction.ts` — strict-JSON, privacy-conservative extraction of up to two
+  user-volunteered durable facts after successful interactions; honors per-user opt-out.
+- `contextEval.ts` — live Grid eval for summary continuity and memory privacy behavior.
 - `discord/`, `skills/`, `images/`, `docs/`, `store/`, `util/` — subsystems, each owned in
   its own AGENTS.md.
 - `smoke.ts` — build-and-run smoke check (`npm run smoke`).
@@ -43,18 +48,18 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 - **Addressed messages bypass the per-user cooldown, not participation judgment.** A mention /
   reply-to-bot (even with the ping off — detected via the fetched referenced message) / DM is
   considered promptly, then the AI may still ignore it. The reply ceiling applies to everyone.
-- **Don't duplicate the current message in context.** `index.ts` snapshots history BEFORE
-  storing the incoming message and passes it as `ctx.history`; the message appears once, as
-  the "Latest —" line. **Chattiness** (`settings`) sets the participation judge's
-  threshold; it is not a probability or regex gate.
+- **Don't duplicate or stale the current message in context.** Incoming messages are stored
+  with Discord message IDs. At execution time, `turn.ts` rebuilds bounded recent history,
+  excluding only the trigger; this lets a sticky addressed turn see intervening chatter.
+  **Chattiness** (`settings`) sets the participation judge's threshold; it is not random.
 - **Readable I/O.** Inbound mentions/emoji are resolved to names (`@alice`, `#general`,
   `:smile:`) for both the model and stored history; the model never sees raw `<@id>`. Outbound
   messages never ping (`SAFE_MENTIONS`: no reply ping, no @everyone/@here/role) — the bot
   speaks in plain text and addresses people by name.
-- **Per-user memory is automatic.** `contextBlock` surfaces `userMemory.list(userId)` (what we
-  know about the speaker) every turn; the `remember` tool writes there (keyed to the current
-  user), so memory works with no external service. A bare `@aigarth` (addressed, no text) still
-  gets a turn — it's a real ping, not noise.
+- **Per-user memory is automatic and user-controlled.** `contextBlock` surfaces known facts
+  every turn. `memoryExtraction.ts` saves only volunteered, non-sensitive durable facts;
+  `remember` can save explicit facts. Both honor `!memory off`. A bare `@aigarth`
+  (addressed, no text) still gets judged as a real ping.
 - **Tools, not prompt:** capabilities are pi `AgentTool`s registered in `buildTools`. A tool
   that produces an image returns its URL in `result.details.images`; `runTurn` forwards each
   to `ctx.onImage` so `index.ts` attaches it to the next reply.

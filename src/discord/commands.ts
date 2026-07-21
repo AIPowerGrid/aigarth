@@ -1,6 +1,6 @@
 import { type Message, EmbedBuilder } from "discord.js";
 import { config, isAdmin } from "../config.js";
-import { settings } from "../store/db.js";
+import { settings, userMemory } from "../store/db.js";
 import { getMemory } from "../memory.js";
 import { listDocs, saveDoc, deleteDoc } from "../docs/store.js";
 
@@ -36,6 +36,41 @@ export async function handleCommand(message: Message): Promise<boolean> {
       }
       settings.set("chattiness_level", String(n));
       await message.reply(`✅ chattiness set to **${n}/10**`);
+      return true;
+    }
+
+    case "memory": {
+      const mode = arg.toLowerCase();
+      if (mode === "off") {
+        userMemory.setEnabled(message.author.id, false);
+        const removed = userMemory.clear(message.author.id);
+        await message.reply(
+          `personal fact memory is off for you; deleted ${removed} fact(s). ` +
+            "Recent channel history still follows the channel retention policy.",
+        );
+        return true;
+      }
+      if (mode === "on") {
+        userMemory.setEnabled(message.author.id, true);
+        await message.reply("personal fact memory is on for you. I will only keep non-sensitive facts you volunteer.");
+        return true;
+      }
+      const enabled = userMemory.isEnabled(message.author.id);
+      const facts = userMemory.list(message.author.id, config.userMemoryMax);
+      const body = facts.length ? facts.map((f, i) => `${i + 1}. ${f}`).join("\n") : "nothing stored";
+      await message.reply(`personal fact memory: **${enabled ? "on" : "off"}**\n${body}`);
+      return true;
+    }
+
+    case "forget": {
+      if (!arg) {
+        await message.reply("usage: `!forget <word or phrase>` or `!forget all`");
+        return true;
+      }
+      const removed = arg.toLowerCase() === "all"
+        ? userMemory.clear(message.author.id)
+        : userMemory.forget(message.author.id, arg);
+      await message.reply(`deleted ${removed} stored fact(s).`);
       return true;
     }
 
@@ -95,6 +130,10 @@ function helpEmbed(admin: boolean): EmbedBuilder {
         "• `@me what's AIPG's reward model?`\n" +
         "• `@me draw a neon power grid, flux, landscape`\n" +
         "• `@me price of ai-power-grid`",
+    })
+    .addFields({
+      name: "Your memory",
+      value: "`!memory` · `!memory on|off` · `!forget <phrase|all>`",
     });
   if (admin) {
     e.addFields({

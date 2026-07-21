@@ -9,6 +9,7 @@ import { createCoalescer, type Coalescer } from "./discord/coalescer.js";
 import { processActivity } from "./discord/turn.js";
 import { renderMentions } from "./discord/render.js";
 import { PROMPT_VERSION } from "./prompts.js";
+import { maybeRefreshChannelSummary } from "./conversationSummary.js";
 
 const client = new Client({
   intents: [
@@ -81,12 +82,18 @@ client.on(Events.MessageCreate, async (message) => {
       guild: !!message.guild,
     });
 
-    // Snapshot PRIOR history BEFORE storing this message (so it's not duplicated in
-    // context), then store it (mentions resolved to readable names).
-    let priorHistory = "";
+    // Persist first. The turn rebuilds a fresh bounded transcript by message ID, so
+    // a protected mention still sees any chatter that arrived while it was pending.
     if (inTracked) {
-      priorHistory = messages.formatRecent(message.channelId, config.historyWindow);
-      messages.add(message.channelId, message.author.displayName ?? message.author.username, renderMentions(client, message), message.author.id, false);
+      messages.add(
+        message.channelId,
+        message.author.displayName ?? message.author.username,
+        renderMentions(client, message),
+        message.author.id,
+        false,
+        message.id,
+      );
+      void maybeRefreshChannelSummary(message.channelId);
     }
 
     // `!` commands bypass the agent entirely.
@@ -145,7 +152,7 @@ client.on(Events.MessageCreate, async (message) => {
       .map((a) => a.url);
 
     coalescer.noteActivity({
-      message, inTracked, content, priorHistory, modTarget,
+      message, inTracked, content, modTarget,
       mentioned, repliedToBot, isDM, addressed, untrustedLink, imageUrls,
     });
   } catch (err) {

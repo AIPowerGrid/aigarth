@@ -14,7 +14,7 @@ import { getMemory } from "../memory.js";
  * @param saveUserFact local per-user memory writer (always available, keyed to the
  *   person currently being talked to) — runs in addition to hindsight if configured.
  */
-export function makeRememberTool(getTags: () => string[], saveUserFact: (fact: string) => void): AgentTool {
+export function makeRememberTool(getTags: () => string[], saveUserFact: (fact: string) => boolean): AgentTool {
   return {
     name: "remember",
     label: "Remember",
@@ -31,7 +31,9 @@ export function makeRememberTool(getTags: () => string[], saveUserFact: (fact: s
       const fact = String(params.fact ?? "").trim();
       if (!fact) return { content: [{ type: "text", text: "(nothing to remember)" }], details: {} };
       // Local per-user memory always works; hindsight is an additional semantic layer.
-      saveUserFact(fact);
+      if (!saveUserFact(fact)) {
+        return { content: [{ type: "text", text: "memory is disabled for this user" }], details: {} };
+      }
       const mem = await getMemory();
       if (mem.enabled) await mem.remember(fact, { tags: getTags(), context: params.about });
       return { content: [{ type: "text", text: "noted" }], details: {} };

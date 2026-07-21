@@ -23,8 +23,9 @@ not automatic response paths. The full chat agent (`../agent.ts`) only runs on `
   `action` = `moderate` | `ban` | `delete`; `ban`→ban, `delete`→remove the message,
   `moderate`→`SCAM_OUTCOME` (reversible timeout default). `BAN_VOTE_THRESHOLD` ✅ enact; bot
   never self-votes. Backs BOTH the scam screen and the agent's poll tools.
-- `commands.ts` — `handleCommand`: `!help` (all), admin `!chattiness` / `!remember` /
-  `!upload` / `!list` / `!delete`. Doc commands operate on `docs/store.ts`.
+- `commands.ts` — `handleCommand`: `!help`; user-owned `!memory [on|off]` and
+  `!forget <phrase|all>`; admin `!chattiness` / `!remember` / `!upload` / `!list` /
+  `!delete`. Doc commands operate on `docs/store.ts`.
 
 ## Local Contracts
 

@@ -12,8 +12,9 @@
     "start": "node dist/index.js",
     "dev": "tsc -p tsconfig.json && node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && DISCORD_TOKEN=x GRID_API_KEY=x node --test $(find dist -name '*.test.js')",
+    "test": "tsc -p tsconfig.json && DISCORD_TOKEN=x GRID_API_KEY=x STATE_DB_PATH=:memory: node --test $(find dist -name '*.test.js')",
     "eval": "tsc -p tsconfig.json && node dist/eval.js",
+    "eval:context": "tsc -p tsconfig.json && node dist/contextEval.js",
     "smoke": "tsc -p tsconfig.json && node dist/smoke.js"
   },
   "dependencies": {

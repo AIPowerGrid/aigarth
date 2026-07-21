@@ -37,8 +37,9 @@ registers them per turn.
   Registered only when a vision model is configured.
 - `channelStatus.ts` — `set_channel_status` (writes `store/db.ts` channel status).
 - `memorySkills.ts` — `remember` / `recall`. `remember` writes **local per-user memory**
-  (`store/db.ts` `userMemory`, keyed to the current speaker — always on, auto-surfaced in
-  context next time) and also hindsight if configured; `recall` searches hindsight.
+  (`store/db.ts` `userMemory`, keyed to the current speaker and surfaced next time) and
+  also hindsight if configured; `recall` searches hindsight.
+  `remember` must honor per-user memory preference before writing either backend.
 - `react.ts` — `react`: emoji-react via the discord-supplied `DiscordActions.react` callback.
 
 ## Local Contracts

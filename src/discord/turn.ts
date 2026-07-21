@@ -1,7 +1,7 @@
 import { ActivityType, type Client, type MessageMentionOptions } from "discord.js";
 import { config } from "../config.js";
 import { log } from "../util/log.js";
-import { messages, settings, reminders } from "../store/db.js";
+import { channelSummaries, messages, settings, reminders } from "../store/db.js";
 import { canSend, recordBotSend, botSpokeRecently, passCooldown } from "./gating.js";
 import { openModerationVote } from "./scam.js";
 import { decideEngagement } from "./gate.js";
@@ -10,6 +10,8 @@ import type { DiscordActions } from "../skills/discordActions.js";
 import type { Activity, Coalescer } from "./coalescer.js";
 import { stripImageMarkdown, chunk } from "./text.js";
 import { fetchAttachments } from "./render.js";
+import { maybeExtractUserFacts } from "../memoryExtraction.js";
+import { maybeRefreshChannelSummary } from "../conversationSummary.js";
 
 // Bot messages never ping: no reply ping, no @everyone/@here/role pings (the model
 // speaks in plain text and addresses people by name, like a person would).
@@ -45,8 +47,16 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       return;
     }
 
+    const history = messages.formatRecent(channelId, {
+      limit: config.historyWindow,
+      maxChars: config.historyMaxChars,
+      excludeMessageId: message.id,
+    });
+    const channelSummary = channelSummaries.get(channelId)?.summary ?? "";
+
     const decision = await decideEngagement({
-      history: act.priorHistory,
+      history,
+      summary: channelSummary,
       latest: act.content,
       userName: message.author.displayName ?? message.author.username,
       recentlyEngaged: botSpokeRecently(channelId),
@@ -107,7 +117,10 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       recordBotSend(channelId);
       sentAnything = true;
       postedMessage = true;
-      if (inTracked && clean) messages.add(channelId, config.botName, clean, client.user?.id ?? null, true);
+      if (inTracked && clean) {
+        messages.add(channelId, config.botName, clean, client.user?.id ?? null, true);
+        void maybeRefreshChannelSummary(channelId);
+      }
     };
 
     const actions: DiscordActions = {
@@ -134,7 +147,10 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
           recordBotSend(channelId);
           sentAnything = true;
           postedMessage = true;
-          if (inTracked && text) messages.add(channelId, config.botName, text, client.user?.id ?? null, true);
+          if (inTracked && text) {
+            messages.add(channelId, config.botName, text, client.user?.id ?? null, true);
+            void maybeRefreshChannelSummary(channelId);
+          }
         } catch (e) {
           log.debug("thread reply failed; replying inline", { err: String(e) });
           await postText(text);
@@ -201,7 +217,8 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       userName: message.author.displayName ?? message.author.username,
       text: act.content || "(they pinged you with no other text)",
       imageUrls: act.imageUrls,
-      history: act.priorHistory,
+      history,
+      channelSummary,
       chattiness: settings.getChattiness(),
       mentioned: act.mentioned,
       repliedToBot: act.repliedToBot,
@@ -221,6 +238,13 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       await postText(result.finalText);
     }
     if (pendingImages.length) await postText(""); // leftover images nothing posted yet
+    if (!result.error) {
+      void maybeExtractUserFacts({
+        userId: message.author.id,
+        userName: message.author.displayName ?? message.author.username,
+        latest: act.content,
+      });
+    }
     log.info("turn done", { ch: channelId, sent: sentAnything || postedMessage, error: result.error });
   } catch (err) {
     log.error("channel turn error", { err: String(err) });

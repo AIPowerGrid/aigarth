@@ -39,6 +39,7 @@ export function parseVerdict(s: unknown): GateDecision | null {
 
 export async function decideEngagement(opts: {
   history: string;
+  summary?: string;
   latest: string;
   userName: string;
   recentlyEngaged: boolean;
@@ -108,6 +109,7 @@ export async function decideEngagement(opts: {
             content:
               `Signals: mentioned=${!!opts.mentioned}; replied_to_bot=${!!opts.repliedToBot}; ` +
               `dm=${!!opts.isDM}; bot_spoke_recently=${opts.recentlyEngaged}\n` +
+              `Earlier channel summary:\n${opts.summary || "(none)"}\n\n` +
               `Recent chat:\n${opts.history || "(start of conversation)"}\n\n` +
               `LATEST — ${opts.userName}: ${opts.latest}\n\nReturn the JSON verdict.`,
           },

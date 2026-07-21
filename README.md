@@ -38,7 +38,7 @@ Every capability is a real tool the model chooses to call:
 | 💸 **Crypto** | Prices, coin search, and price charts |
 | 👁 **Vision** | Describe an image someone drops in |
 | 🔗 **Link previews** | Unfurl a shared URL |
-| 🧠 **Memory** | Remembers facts across conversations |
+| 🧠 **Memory** | Bounded recent context, rolling channel summaries, and user-controlled durable facts |
 | 🛡 **Moderation** | Flags scams; bans/deletes enact only on community ✅ votes — never the bot alone |
 
 ## Built on
@@ -68,7 +68,12 @@ uvicorn retrieval_service:app --host 127.0.0.1 --port 8088
 |--|--|
 | `DISCORD_TOKEN`, `GRID_API_KEY` | Required |
 | `GRID_GATE_MODEL` | Participation judge; defaults to `GRID_CHAT_MODEL` |
+| `GRID_SUMMARY_MODEL` | Rolling summaries; defaults to the capable chat/judge model |
 | `GRID_VISION_MODEL` | Enables vision when set to a multimodal grid model |
 | `HINDSIGHT_URL` | Enables long-term memory (no-op until set) |
+
+Personal fact memory is inspectable and reversible in Discord: `!memory`,
+`!memory on|off`, and `!forget <phrase|all>`. Turning it off clears personal
+facts; ordinary channel transcripts continue to follow their retention policy.
 
 Requires **Node 22.19+**.

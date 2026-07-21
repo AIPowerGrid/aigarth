@@ -22,8 +22,11 @@ community-powered infrastructure, not a corporate cloud.
 - **Live grid status** (`grid_status`) — how many workers are online, the queue,
   and which text/image models are available right now.
 - **Link previews** (`fetch_link_preview`) — safely preview a shared URL.
-- **Memory** (`remember` / `recall`) — long-term memory of useful facts (when
-  configured).
+- **Conversation continuity** — the latest bounded channel transcript plus a compact
+  rolling summary of older discussion.
+- **Personal memory** — automatically retains only non-sensitive durable facts a user
+  volunteered. Users can inspect, disable, or erase it with `!memory` and `!forget`;
+  the `remember` / `recall` tools provide the agent-facing path.
 
 ## How it decides to respond
 
@@ -34,7 +37,8 @@ community-powered infrastructure, not a corporate cloud.
   recent participation and the chattiness setting raising or lowering that bar.
 - It can reply with text, react with a single emoji, or stay silent.
 
-## Admin commands
+## Commands
 
+Everyone: `!memory [on|off]`, `!forget <phrase|all>`. Admins:
 `!chattiness <1-10>`, `!remember <fact>`, and doc management
 (`!upload` a markdown file, `!list`, `!delete`).

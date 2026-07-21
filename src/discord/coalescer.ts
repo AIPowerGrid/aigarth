@@ -8,7 +8,6 @@ export interface Activity {
   message: EventMessage;
   inTracked: boolean;
   content: string;
-  priorHistory: string;
   modTarget: Message;
   mentioned: boolean;
   repliedToBot: boolean;

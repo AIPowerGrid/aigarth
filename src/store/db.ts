@@ -26,6 +26,7 @@ db.pragma("foreign_keys = ON");
 db.exec(`
 CREATE TABLE IF NOT EXISTS messages (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id  TEXT,
   channel_id  TEXT NOT NULL,
   author_name TEXT NOT NULL,
   author_id   TEXT,
@@ -34,6 +35,13 @@ CREATE TABLE IF NOT EXISTS messages (
   ts          INTEGER NOT NULL              -- UTC epoch ms
 );
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS channel_summaries (
+  channel_id         TEXT PRIMARY KEY,
+  summary            TEXT NOT NULL,
+  through_message_id INTEGER NOT NULL DEFAULT 0,
+  updated_ts         INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS channel_status (
   channel_id   TEXT PRIMARY KEY,
@@ -55,6 +63,11 @@ CREATE TABLE IF NOT EXISTS user_facts (
   ts        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_user_facts ON user_facts(user_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS memory_preferences (
+  user_id TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 1
+);
 
 CREATE TABLE IF NOT EXISTS reminders (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,10 +94,10 @@ CREATE TABLE IF NOT EXISTS ban_votes (
 );
 `);
 
-// Idempotent migration: add the action/target_msg_id columns to ban_votes tables
-// created before community ban/delete polls existed (a live db won't get them
-// from CREATE IF NOT EXISTS). Each ALTER throws if the column is already there.
+// Idempotent migrations for tables created by older releases. Each ALTER throws
+// harmlessly when the column already exists.
 for (const stmt of [
+  "ALTER TABLE messages ADD COLUMN message_id TEXT",
   "ALTER TABLE ban_votes ADD COLUMN action TEXT NOT NULL DEFAULT 'moderate'",
   "ALTER TABLE ban_votes ADD COLUMN target_msg_id TEXT",
 ]) {
@@ -94,19 +107,53 @@ for (const stmt of [
     /* column already exists */
   }
 }
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id) WHERE message_id IS NOT NULL");
 
 const clamp = (s: string) => (s.length > MAX_CONTENT ? s.slice(0, MAX_CONTENT) : s);
 
+/** Durable transcripts should not become a secret vault. The live message remains
+ * available to the current turn, but credential-shaped values are redacted on disk. */
+export function redactStoredContent(value: string): string {
+  return value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [redacted]")
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "[redacted-api-key]")
+    .replace(
+      /((?:api[_ -]?key|access[_ -]?token|private[_ -]?key|password)\s*(?:is|=|:)\s*)\S+/gi,
+      "$1[redacted]",
+    )
+    .replace(/(seed[_ -]?phrase\s*(?:is|=|:)\s*).*$/gim, "$1[redacted]");
+}
+
+// Scrub legacy rows once on startup as well as all new writes.
+const selStoredContent = db.prepare("SELECT id, content FROM messages");
+const updateStoredContent = db.prepare("UPDATE messages SET content = ? WHERE id = ?");
+const scrubStoredContent = db.transaction(() => {
+  for (const row of selStoredContent.all() as Array<{ id: number; content: string }>) {
+    const redacted = redactStoredContent(row.content);
+    if (redacted !== row.content) updateStoredContent.run(redacted, row.id);
+  }
+});
+scrubStoredContent();
+
 // ── messages ────────────────────────────────────────────────────────────
 const insMsg = db.prepare(
-  "INSERT INTO messages (channel_id, author_name, author_id, content, is_bot, ts) VALUES (?,?,?,?,?,?)",
+  "INSERT OR IGNORE INTO messages (message_id, channel_id, author_name, author_id, content, is_bot, ts) VALUES (?,?,?,?,?,?,?)",
 );
 const selRecent = db.prepare(
-  "SELECT author_name, author_id, content, is_bot, ts FROM messages WHERE channel_id = ? ORDER BY id DESC LIMIT ?",
+  `SELECT id, message_id, author_name, author_id, content, is_bot, ts
+   FROM messages
+   WHERE channel_id = ? AND (? IS NULL OR message_id IS NULL OR message_id != ?)
+   ORDER BY id DESC LIMIT ?`,
 );
 const delOld = db.prepare("DELETE FROM messages WHERE ts < ?");
+const selSummaryBatch = db.prepare(
+  `SELECT id, message_id, author_name, author_id, content, is_bot, ts
+   FROM messages WHERE channel_id = ? AND id > ? AND id < ? ORDER BY id ASC LIMIT ?`,
+);
 
 export interface StoredMessage {
+  id: number;
+  message_id: string | null;
   author_name: string;
   author_id: string | null;
   content: string;
@@ -124,31 +171,98 @@ function ago(ms: number): string {
 }
 
 export const messages = {
-  add(channelId: string, author: string, content: string, authorId: string | null, isBot: boolean) {
-    insMsg.run(channelId, author, authorId, clamp(content), isBot ? 1 : 0, Date.now());
+  add(
+    channelId: string,
+    author: string,
+    content: string,
+    authorId: string | null,
+    isBot: boolean,
+    messageId: string | null = null,
+  ) {
+    insMsg.run(messageId, channelId, author, authorId, clamp(redactStoredContent(content)), isBot ? 1 : 0, Date.now());
   },
-  recent(channelId: string, limit: number): StoredMessage[] {
-    return (selRecent.all(channelId, limit) as StoredMessage[]).reverse(); // chronological
+  recent(channelId: string, limit: number, excludeMessageId: string | null = null): StoredMessage[] {
+    return (selRecent.all(channelId, excludeMessageId, excludeMessageId, limit) as StoredMessage[]).reverse();
   },
   /** Format the last `limit` messages as a transcript for prompt context. The bot's
    *  OWN past messages are marked "(you)" so it clearly recognizes what it already
    *  said and who it is in the conversation. A relative-time marker is inserted on
    *  big gaps so it can tell a continuous chat from one resuming hours later. */
-  formatRecent(channelId: string, limit: number): string {
-    const rows = this.recent(channelId, limit);
+  formatRecent(
+    channelId: string,
+    opts: { limit: number; maxChars: number; excludeMessageId?: string | null },
+  ): string {
+    const rows = this.recent(channelId, opts.limit, opts.excludeMessageId ?? null);
     if (rows.length === 0) return "";
-    const out: string[] = [];
-    let prevTs = 0;
-    for (const m of rows) {
-      if (prevTs && m.ts - prevTs > 10 * 60_000) out.push(`  ⋯ (${ago(m.ts - prevTs)} later)`);
-      const who = m.is_bot ? `${m.author_name} (you)` : m.author_name;
-      out.push(`${who}: ${m.content}`);
-      prevTs = m.ts;
-    }
-    return out.join("\n");
+    return formatRows(withinCharacterBudget(rows, opts.maxChars));
+  },
+  /** Old messages eligible for folding into a rolling summary. Keeps the newest
+   * `keepRecent` messages verbatim and advances strictly after `afterId`. */
+  summaryBatch(channelId: string, afterId: number, keepRecent: number, maxRecentChars: number, limit: number) {
+    const recentRows = withinCharacterBudget(this.recent(channelId, keepRecent), maxRecentChars);
+    const cutoff = recentRows[0]?.id;
+    if (!cutoff) return { count: 0, throughId: afterId, transcript: "" };
+    const rows = selSummaryBatch.all(channelId, afterId, cutoff, limit) as StoredMessage[];
+    return {
+      count: rows.length,
+      throughId: rows.at(-1)?.id ?? afterId,
+      transcript: formatRows(rows),
+    };
   },
   cleanup(daysToKeep: number): number {
     return delOld.run(Date.now() - daysToKeep * 86_400_000).changes as number;
+  },
+};
+
+function withinCharacterBudget(rows: StoredMessage[], maxChars: number): StoredMessage[] {
+  const selected: StoredMessage[] = [];
+  let chars = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const estimated = rows[i].author_name.length + rows[i].content.length + 24;
+    if (selected.length > 0 && chars + estimated > maxChars) break;
+    selected.push(rows[i]);
+    chars += estimated;
+  }
+  return selected.reverse();
+}
+
+function formatRows(rows: StoredMessage[]): string {
+  const out: string[] = [];
+  let prevTs = 0;
+  for (const m of rows) {
+    if (prevTs && m.ts - prevTs > 10 * 60_000) out.push(`  ⋯ (${ago(m.ts - prevTs)} later)`);
+    const who = m.is_bot ? `${m.author_name} (you)` : m.author_name;
+    out.push(`${who}: ${m.content}`);
+    prevTs = m.ts;
+  }
+  return out.join("\n");
+}
+
+// ── rolling channel summaries ───────────────────────────────────────────
+const getSummary = db.prepare(
+  "SELECT summary, through_message_id, updated_ts FROM channel_summaries WHERE channel_id = ?",
+);
+const upsertSummary = db.prepare(`
+  INSERT INTO channel_summaries (channel_id, summary, through_message_id, updated_ts) VALUES (?,?,?,?)
+  ON CONFLICT(channel_id) DO UPDATE SET
+    summary=excluded.summary,
+    through_message_id=excluded.through_message_id,
+    updated_ts=excluded.updated_ts
+  WHERE excluded.through_message_id > channel_summaries.through_message_id
+`);
+
+export interface ChannelSummary {
+  summary: string;
+  through_message_id: number;
+  updated_ts: number;
+}
+
+export const channelSummaries = {
+  get(channelId: string): ChannelSummary | null {
+    return (getSummary.get(channelId) as ChannelSummary | undefined) ?? null;
+  },
+  set(channelId: string, summary: string, throughMessageId: number): boolean {
+    return upsertSummary.run(channelId, clamp(summary), throughMessageId, Date.now()).changes > 0;
   },
 };
 
@@ -206,11 +320,17 @@ export const settings = {
   },
 };
 
-// ── per-user memory (local, always-on; durable facts about a person) ──────
+// ── per-user memory (local, user-controlled durable facts) ───────────────
 const insFact = db.prepare("INSERT INTO user_facts (user_id, user_name, fact, ts) VALUES (?,?,?,?)");
 const selFacts = db.prepare("SELECT fact FROM user_facts WHERE user_id = ? ORDER BY id DESC LIMIT ?");
-const dupFact = db.prepare("DELETE FROM user_facts WHERE user_id = ? AND fact = ?");
+const dupFact = db.prepare("DELETE FROM user_facts WHERE user_id = ? AND fact = ? COLLATE NOCASE");
 const delFactLike = db.prepare("DELETE FROM user_facts WHERE user_id = ? AND fact LIKE ? COLLATE NOCASE");
+const delAllFacts = db.prepare("DELETE FROM user_facts WHERE user_id = ?");
+const getMemoryPreference = db.prepare("SELECT enabled FROM memory_preferences WHERE user_id = ?");
+const setMemoryPreference = db.prepare(`
+  INSERT INTO memory_preferences (user_id, enabled) VALUES (?,?)
+  ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled
+`);
 const pruneFacts = db.prepare(
   "DELETE FROM user_facts WHERE user_id = ? AND id NOT IN (SELECT id FROM user_facts WHERE user_id = ? ORDER BY id DESC LIMIT ?)",
 );
@@ -219,6 +339,7 @@ export const userMemory = {
   /** Save a durable fact about a user. Exact dupes are de-duplicated (newest wins),
    *  and each user is capped at `max` facts. */
   add(userId: string, userName: string, fact: string, max: number) {
+    if (!this.isEnabled(userId)) return;
     const f = clamp(fact.trim());
     if (!f) return;
     dupFact.run(userId, f);
@@ -234,6 +355,16 @@ export const userMemory = {
     const t = text.trim();
     if (!t) return 0;
     return delFactLike.run(userId, `%${t}%`).changes as number;
+  },
+  clear(userId: string): number {
+    return delAllFacts.run(userId).changes as number;
+  },
+  isEnabled(userId: string): boolean {
+    const row = getMemoryPreference.get(userId) as { enabled: number } | undefined;
+    return row ? row.enabled === 1 : true;
+  },
+  setEnabled(userId: string, enabled: boolean): void {
+    setMemoryPreference.run(userId, enabled ? 1 : 0);
   },
 };
 

@@ -18,6 +18,11 @@ function num(name: string, def: number): number {
   return v ? Number(v) : def;
 }
 
+function bool(name: string, def: boolean): boolean {
+  const v = process.env[name];
+  return v === undefined ? def : !["0", "false", "no", "off"].includes(v.toLowerCase());
+}
+
 export const config = {
   // Discord
   discordToken: req("DISCORD_TOKEN"),
@@ -83,6 +88,17 @@ export const config = {
 
   // Behavior
   historyWindow: num("HISTORY_WINDOW", 20),
+  historyMaxChars: num("HISTORY_MAX_CHARS", 24000),
+  // Older messages are folded into a compact durable channel summary. Summaries
+  // never replace the recent verbatim window; they provide continuity behind it.
+  gridSummaryModel:
+    process.env.GRID_SUMMARY_MODEL ?? process.env.GRID_GATE_MODEL ?? process.env.GRID_CHAT_MODEL ?? "gpt-oss-120b",
+  summaryMinBatch: num("SUMMARY_MIN_BATCH", 8),
+  summaryBatchSize: num("SUMMARY_BATCH_SIZE", 40),
+  summaryMaxChars: num("SUMMARY_MAX_CHARS", 4000),
+  // Privacy-conservative automatic extraction of user-volunteered durable facts.
+  // Per-user !memory off always overrides this global switch.
+  autoMemoryEnabled: bool("AUTO_MEMORY_ENABLED", true),
   // Per-user cooldown between agent runs (ms) — pure cost/abuse control, NOT a
   // content decision (whether/how to engage is the model's call).
   userCooldownMs: num("USER_COOLDOWN_MS", 4000),
