@@ -32,7 +32,7 @@ export async function maybeRefreshChannelSummary(channelId: string): Promise<voi
 
   inFlight.add(channelId);
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 20_000);
+  const timer = setTimeout(() => ctrl.abort(), config.summaryTimeoutMs);
   try {
     const res = await fetch(`${config.gridV1Url.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",

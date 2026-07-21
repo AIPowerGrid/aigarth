@@ -96,6 +96,7 @@ export const config = {
   summaryMinBatch: num("SUMMARY_MIN_BATCH", 8),
   summaryBatchSize: num("SUMMARY_BATCH_SIZE", 40),
   summaryMaxChars: num("SUMMARY_MAX_CHARS", 4000),
+  summaryTimeoutMs: num("SUMMARY_TIMEOUT_MS", 60000),
   // Privacy-conservative automatic extraction of user-volunteered durable facts.
   // Per-user !memory off always overrides this global switch.
   autoMemoryEnabled: bool("AUTO_MEMORY_ENABLED", true),
