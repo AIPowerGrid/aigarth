@@ -31,7 +31,8 @@ registers them per turn.
   (full page text). `webSearch.ts` — `web_search` (DuckDuckGo HTML via the SSRF-guarded
   fetch; no API key). All three SSRF-guarded + untrusted-fenced.
 - `mood.ts` — `set_mood` (own vibe, persisted in `settings`, shown in context) + `set_chattiness`
-  (self-tune the unaddressed chime-in dial). `getMood()` is read by `agent.ts` contextBlock.
+  (self-tune the participation threshold used by the judge). `getMood()` is read by
+  `agent.ts` contextBlock.
 - `vision.ts` — `describe_image`: separate `GRID_VISION_MODEL`; SSRF-guarded, MIME-sniffed.
   Registered only when a vision model is configured.
 - `channelStatus.ts` — `set_channel_status` (writes `store/db.ts` channel status).

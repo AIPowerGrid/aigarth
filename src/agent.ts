@@ -53,6 +53,8 @@ function personaPrompt(): string {
     "- Match length to the message. If someone just says \"hey aigarth\" or \"you there?\",",
     "  reply in a few words like a friend would (\"yo\" / \"here, what's up\") — not a",
     "  paragraph. Save the detail for real questions.",
+    "- Default to 1-3 short sentences and no more than 120 words. Go longer only when",
+    "  someone explicitly asks for detail, analysis, instructions, or troubleshooting.",
     "- Just answer or react to what was actually said; don't fish for a task.",
     "",
     "Use your tools rather than guessing:",
@@ -92,17 +94,16 @@ function personaPrompt(): string {
     "- `reply_in_thread` branches a deeper side-conversation out of the main channel.",
     "- To stay SILENT, call no tool at all. Silence is a valid, normal move.",
     "",
-    "HOW TO RESPOND — a separate filter already decided this message is worth your",
-    "attention, so your job is to respond well; you rarely need to stay silent:",
+    "HOW TO RESPOND — your participation judge already decided a response would improve",
+    "the room, so your job now is to respond well:",
     "- Reply naturally and actually answer them, like a friend. Match their length.",
     "- Track who said what — lines tagged \"(you)\" are YOUR own past messages. If a",
     "  thanks or compliment is really for someone else who helped (you didn't), stay",
     "  out of it — don't say \"anytime!\" or take credit for an answer you didn't give.",
     "- A react (single emoji) is only a RARE bonus for a genuinely notable moment —",
     "  never instead of answering a real question, never just to acknowledge.",
-    "- Stay silent (call no tool) ONLY in the rare case the message clearly isn't",
-    "  actually for you after all, or someone tells you to stop / be quiet / drop it —",
-    "  then go silent and do NOT acknowledge it (no \"ok, I'll step back\", no 🙏).",
+    "- Do not reopen the participation decision or pad the reply. Answer the latest",
+    "  message directly; use a reaction instead only when words truly add nothing.",
     "",
     "KEEPING THE CHANNEL SAFE — community-decided, never by you alone:",
     "- For a clear scam, raid, phishing / shady link, wallet-drainer, giveaway-bait, or",
@@ -133,17 +134,13 @@ export interface TurnContext {
   /** Prior transcript (snapshotted BEFORE the current message was stored, so it
    *  isn't duplicated). Falls back to a fresh fetch if omitted. */
   history?: string;
-  /** Chattiness dial (1–10) — biases how readily the model chimes into chatter it
-   *  wasn't addressed in. Ignored when the message is addressed to the bot. */
+  /** Chattiness dial (1–10), already applied by the participation judge. */
   chattiness?: number;
   /** How the latest message relates to the bot — shown to the model so IT decides
    *  whether/how to engage (replaces the old regex "addressed" verdict). */
   mentioned?: boolean;
   repliedToBot?: boolean;
   isDM?: boolean;
-  /** Reached the agent via the engagement gate (not a structural fast-path) — i.e. the
-   *  gate judged this worth a reply (addressed by name/implicitly, or a real opening). */
-  gateEngaged?: boolean;
   /** The bot posted in this channel recently (so it shouldn't dominate). */
   spokeRecently?: boolean;
   /** Side-effecting Discord actions the model drives via tools (reply/react/etc.). */
@@ -225,8 +222,7 @@ function contextBlock(ctx: TurnContext): string {
   else if (ctx.mentioned) relation = `${ctx.userName} mentioned you directly — they're talking to you.`;
   else if (ctx.repliedToBot) relation = `${ctx.userName} is replying to something you said.`;
   else
-    // gateEngaged: a separate filter already judged this worth replying to (they
-    // addressed you by name/implicitly, or it's a real opening to help).
+    // The participation judge already found that a response improves the room.
     relation =
       `This message is worth a reply from you — they're likely talking to you, or it's ` +
       `a genuine opening to help. Respond naturally to the latest message.`;

@@ -95,18 +95,17 @@ export const config = {
   // A directly-addressed message uses the shorter window (respond promptly).
   convSettleMs: num("CONV_SETTLE_MS", 1500),
   convSettleAddressedMs: num("CONV_SETTLE_ADDRESSED_MS", 500),
-  // Cheap/fast model that decides engagement (respond / react / ignore) for messages
-  // that aren't a structural fast-path (@-mention / reply-to-bot / DM). It handles ALL
-  // addressing judgment — name in any spelling, implicit address, worth-chiming-in —
-  // so there's no name matcher. The full chat model only runs when it says respond.
-  gridGateModel: process.env.GRID_GATE_MODEL ?? "gpt-oss-20b",
+  // Model that decides engagement for every eligible message. Default to the same
+  // capable model as chat; participation judgment is part of the agent's behavior,
+  // not a structural mention/reply shortcut.
+  gridGateModel: process.env.GRID_GATE_MODEL ?? process.env.GRID_CHAT_MODEL ?? "gpt-oss-120b",
   // Hard ceiling on a single agent turn. If a grid worker stalls mid-stream the turn
   // is aborted so it can't hang forever (generous, to allow slow image gen).
   turnTimeoutMs: num("TURN_TIMEOUT_MS", 120000),
   // How many durable facts to keep per user (local per-user memory).
   userMemoryMax: num("USER_MEMORY_MAX", 30),
   // Hard backstop: max bot messages per channel per rolling minute (all kinds).
-  maxRepliesPerMin: num("MAX_REPLIES_PER_MIN", 10),
+  maxRepliesPerMin: num("MAX_REPLIES_PER_MIN", 4),
   // Community moderation votes (scam screen + the AI's ban/delete polls). Human
   // votes only; the bot never self-votes. 4 ✅ enact, 3 ❌ dismiss.
   banVoteThreshold: num("BAN_VOTE_THRESHOLD", 4),

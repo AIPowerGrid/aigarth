@@ -2,7 +2,7 @@ import { ActivityType, type Client, type MessageMentionOptions } from "discord.j
 import { config } from "../config.js";
 import { log } from "../util/log.js";
 import { messages, settings, reminders } from "../store/db.js";
-import { canSend, recordBotSend, botSpokeRecently } from "./gating.js";
+import { canSend, recordBotSend, botSpokeRecently, passCooldown } from "./gating.js";
 import { openModerationVote } from "./scam.js";
 import { decideEngagement } from "./gate.js";
 import { runTurn } from "../agent.js";
@@ -23,8 +23,8 @@ const NO_TYPING = new Set([
 ]);
 
 /**
- * Process one coalesced channel turn: the cheap engagement gate (for non-fast-path
- * messages), then the per-turn Discord surface + the full chat agent + posting.
+ * Process one coalesced channel turn: the engagement judge for every message, then
+ * the per-turn Discord surface + the full chat agent + posting on `respond`.
  * Called by the coalescer (which owns serialization/settle/snooze).
  */
 export async function processActivity(client: Client, act: Activity, coalescer: Coalescer): Promise<void> {
@@ -40,42 +40,36 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       log.warn("per-channel reply ceiling hit; skipping", { channel: channelId });
       return;
     }
-
-    // Structural fast-paths (@-mention / reply-to-bot / DM) always respond and skip
-    // the gate. Everything else goes through the cheap gate model, which decides
-    // respond / react / ignore — handling ALL addressing judgment so there's no matcher.
-    if (!act.addressed) {
-      const decision = await decideEngagement({
-        history: act.priorHistory,
-        latest: act.content,
-        userName: message.author.displayName ?? message.author.username,
-        recentlyEngaged: botSpokeRecently(channelId),
-        chattiness: settings.getChattiness(),
-        untrustedLink: act.untrustedLink,
-      });
-      log.info("gate", { ch: channelId, action: decision.action, emoji: decision.emoji, text: act.content.slice(0, 100) });
-      if (decision.action === "react") {
-        try {
-          await modTarget.react(decision.emoji || "👍");
-          recordBotSend(channelId);
-        } catch (e) {
-          log.debug("react failed", { err: String(e) });
-        }
-        return;
-      }
-      if (decision.action === "ignore") {
-        // Fail OPEN on the bot's name: if the gate FAILED (timeout/error) but the message
-        // literally uses the bot's name, respond anyway — a gate hiccup must never silently
-        // drop a name-addressed request. A genuine "ignore" verdict is still respected.
-        const named = config.botName && act.content.toLowerCase().includes(config.botName.toLowerCase());
-        if (decision.error && named) {
-          log.info("gate failed but name present — responding", { ch: channelId });
-        } else {
-          return;
-        }
-      }
-      // respond (or gate-failed-but-named) → fall through to the full chat agent
+    if (!act.addressed && !passCooldown(message.author.id)) {
+      log.debug("per-user attention cooldown; skipping", { channel: channelId, user: message.author.id });
+      return;
     }
+
+    const decision = await decideEngagement({
+      history: act.priorHistory,
+      latest: act.content,
+      userName: message.author.displayName ?? message.author.username,
+      recentlyEngaged: botSpokeRecently(channelId),
+      chattiness: settings.getChattiness(),
+      mentioned: act.mentioned,
+      repliedToBot: act.repliedToBot,
+      isDM: act.isDM,
+      untrustedLink: act.untrustedLink,
+    });
+    log.info("gate", {
+      ch: channelId, action: decision.action, emoji: decision.emoji,
+      reason: decision.reason, error: decision.error, text: act.content.slice(0, 100),
+    });
+    if (decision.action === "react") {
+      try {
+        await modTarget.react(decision.emoji || "👍");
+        recordBotSend(channelId);
+      } catch (e) {
+        log.debug("react failed", { err: String(e) });
+      }
+      return;
+    }
+    if (decision.action === "ignore") return;
 
     const startTyping = (channel: any): void => {
       typingChannel = channel;
@@ -212,7 +206,6 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       mentioned: act.mentioned,
       repliedToBot: act.repliedToBot,
       isDM: act.isDM,
-      gateEngaged: !act.addressed,
       spokeRecently: botSpokeRecently(channelId),
       actions,
       onImage: (u) => pendingImages.push(u),

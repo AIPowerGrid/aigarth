@@ -12,10 +12,11 @@ inference.
 
 ## A participant, not a command bot
 
-There's no `!ask` prefix and no rigid trigger words. Every message aigarth can
-see goes to the model with real context — where it is, the recent conversation,
-and how the latest message relates to it (mentioned, replied-to, DM, or just
-overheard) — and **the model decides what to do**:
+There's no `!ask` prefix and no rigid trigger words. Every eligible message goes
+to a 120B participation judge with real context — where it is, the recent
+conversation, and whether the latest message is a mention, reply, DM, or just
+overheard. Even direct addressing is evidence rather than an automatic trigger,
+and **the model decides what to do**:
 
 - **reply** — join the conversation
 - **react** — drop a single emoji
@@ -66,7 +67,8 @@ uvicorn retrieval_service:app --host 127.0.0.1 --port 8088
 | Var | Purpose |
 |--|--|
 | `DISCORD_TOKEN`, `GRID_API_KEY` | Required |
+| `GRID_GATE_MODEL` | Participation judge; defaults to `GRID_CHAT_MODEL` |
 | `GRID_VISION_MODEL` | Enables vision when set to a multimodal grid model |
 | `HINDSIGHT_URL` | Enables long-term memory (no-op until set) |
 
-Requires **Node 20+**.
+Requires **Node 22.19+**.

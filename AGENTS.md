@@ -71,12 +71,13 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
 - **Server-side URL fetches are SSRF-guarded.** Any fetch of a user-supplied URL MUST go
   through `src/util/net.ts` (`isSafePublicUrl` / `safeFetchText` / `safeFetchBuffer`).
   Treat scraped/tool content as untrusted data, fenced — never as instructions.
-- **The AI owns the engagement decision; Discord actions are tools.** There is no regex
-  deciding "addressed" or "be quiet" and no separate respond/ignore gate — every eligible
-  message goes to the agent, which chooses to `reply` / `react` / `reply_in_thread` /
-  open a moderation poll / stay silent (call nothing). What stays deterministic and
-  off the LLM path is only *mechanical*: `!` commands, per-user cooldown, the per-channel
-  reply ceiling, and the fail-closed scam screen.
+- **The AI owns the engagement decision; Discord actions are tools.** Every eligible
+  message, including an @-mention, reply, or DM, first goes to the capable Grid-backed
+  participation judge (`src/discord/gate.ts`). Addressing is context, never an automatic
+  response trigger. On `respond`, the full tool-capable agent runs; `react` is applied
+  directly; `ignore` stays silent. The judge uses strict JSON and fails closed. What stays
+  deterministic is mechanical: `!` commands, cooldowns, coalescing, the per-channel reply
+  ceiling, and the fail-closed scam screen.
 - **Moderation is community-decided, never the AI alone.** The AI may only *propose*
   bans/deletes via `start_ban_poll` / `start_delete_poll`; they enact only on
   `BAN_VOTE_THRESHOLD` human ✅ votes. The bot never self-votes.
@@ -85,7 +86,7 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
 
 - New capability → add a `make*Tool` skill under `src/skills/` and register it in
   `buildTools` (`src/agent.ts`); do not stuff capabilities into the system prompt.
-- Errors fail safe: a bad turn produces silence (no apology spam); the proactive gate and
+- Errors fail safe: a bad turn produces silence (no apology spam); the participation judge and
   SSRF guard fail closed.
 - Requires Node 22.19+ (`package.json` engines), matching the pi agent-core
   packages. `better-sqlite3` also needs a compatible prebuilt binary or native

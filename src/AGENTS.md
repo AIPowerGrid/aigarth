@@ -13,9 +13,9 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
   settle timer (`CONV_SETTLE_MS`, shorter when addressed) then runs **one** `runChannelTurn`
   per channel (serialized; re-runs if activity arrived during it), responding to the channel's
   *current* state — so it structurally can't answer stale messages or post out of order.
-  `runChannelTurn` first checks the **engagement gate** (`discord/gate.ts`, cheap model →
-  respond/react/ignore) for non-fast-path messages — @-mention/reply/DM skip it and always
-  respond. Only on `respond` does it build the per-turn **Discord surface** (`reply`/`react`/
+  `runChannelTurn` first checks the **participation judge** (`discord/gate.ts`, the configured
+  capable Grid model → respond/react/ignore) for every message; @-mention/reply/DM are strong
+  context but never bypass judgment. Only on `respond` does it build the per-turn **Discord surface** (`reply`/`react`/
   `reply_in_thread`/polls/`snooze`/presence/nickname/`create_poll`/`remind`) and call `runTurn`
   (hard-timeout-aborted via `TURN_TIMEOUT_MS`). Posted text is run through `unwrapToolCallText`
   (models sometimes emit a reply as literal JSON). Reminder-delivery + housekeeping timers +
@@ -40,13 +40,13 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 - **The model acts only through tools.** Speaking is the `reply` tool, not free text (free
   text is private scratch); reacting/threading/moderation likewise. Silence = no tool call.
   `index.ts` supplies the per-turn `DiscordActions` callbacks; `agent.ts` wraps them as tools.
-- **Addressed messages bypass the per-user cooldown.** A mention / reply-to-bot (even with
-  the ping off — detected via the fetched referenced message) / DM must never be dropped for
-  a fast follow-up. The per-channel reply ceiling still applies to everyone (loop safety).
+- **Addressed messages bypass the per-user cooldown, not participation judgment.** A mention /
+  reply-to-bot (even with the ping off — detected via the fetched referenced message) / DM is
+  considered promptly, then the AI may still ignore it. The reply ceiling applies to everyone.
 - **Don't duplicate the current message in context.** `index.ts` snapshots history BEFORE
   storing the incoming message and passes it as `ctx.history`; the message appears once, as
-  the "Latest —" line. **Chattiness** (`settings`) is shown in context to bias the model's
-  unaddressed chime-in decision — it is not a regex gate.
+  the "Latest —" line. **Chattiness** (`settings`) sets the participation judge's
+  threshold; it is not a probability or regex gate.
 - **Readable I/O.** Inbound mentions/emoji are resolved to names (`@alice`, `#general`,
   `:smile:`) for both the model and stored history; the model never sees raw `<@id>`. Outbound
   messages never ping (`SAFE_MENTIONS`: no reply ping, no @everyone/@here/role) — the bot

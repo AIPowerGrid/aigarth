@@ -27,9 +27,11 @@ community-powered infrastructure, not a corporate cloud.
 
 ## How it decides to respond
 
-- It always replies when **@mentioned**, named, or DM'd.
-- Otherwise it only **chimes in unprompted** when it can clearly add value
-  (a cheap gate decides), and it won't spam a channel.
+- Every eligible message is judged by a capable Grid model, including
+  **@mentions**, replies, names, and DMs. Direct addressing is strong context, not
+  a forced reply; silence remains valid when a response would add nothing.
+- It only **chimes in unprompted** when it can clearly add distinct value, with
+  recent participation and the chattiness setting raising or lowering that bar.
 - It can reply with text, react with a single emoji, or stay silent.
 
 ## Admin commands

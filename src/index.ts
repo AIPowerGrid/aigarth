@@ -35,7 +35,12 @@ coalescer = createCoalescer({
 });
 
 client.once(Events.ClientReady, (c) => {
-  log.info("aigarth online", { tag: c.user.tag, model: config.gridChatModel, prompts: PROMPT_VERSION });
+  log.info("aigarth online", {
+    tag: c.user.tag,
+    chatModel: config.gridChatModel,
+    gateModel: config.gridGateModel,
+    prompts: PROMPT_VERSION,
+  });
   // Periodic housekeeping: prune old history + expire stale votes.
   setInterval(() => {
     const removed = messages.cleanup(30);
@@ -126,7 +131,7 @@ client.on(Events.MessageCreate, async (message) => {
       ((!!message.reference?.messageId && modTarget !== message && modTarget.author?.id === client.user.id) ||
         message.mentions.repliedUser?.id === client.user.id);
     const isDM = !message.guild;
-    // Structural fast-paths only — name/implicit addressing is judged by the gate later.
+    // Structural context only — even these signals are judged by the AI later.
     const addressed = mentioned || repliedToBot || isDM;
     // A link to an unrecognized host (guild only — ban polls need a guild) → route to
     // aigarth's judgment so it can ban-poll a shady one.

@@ -31,19 +31,18 @@ export function makeSetMoodTool(): AgentTool {
 }
 
 /**
- * set_chattiness — let aigarth self-tune how readily it jumps into UNADDRESSED
- * chatter (1–10), the same dial admins set with !chattiness. Shown in context to
- * bias the chime-in decision (see agent.ts contextBlock).
+ * set_chattiness — let aigarth self-tune its participation threshold (1–10),
+ * the same dial admins set with !chattiness. The participation judge reads it.
  */
 export function makeSetChattinessTool(): AgentTool {
   return {
     name: "set_chattiness",
     label: "Set Chattiness",
     description:
-      "Adjust how readily you jump into chatter you weren't addressed in: 1 = only " +
-      "speak when directly addressed, 10 = very chatty. LOWER it when someone tells " +
-      "you to chill or you sense you're dominating; raise it when the room clearly " +
-      "wants more from you. Doesn't affect replies when you're addressed directly.",
+      "Adjust your participation threshold: 1 = very reserved, 10 = more socially " +
+      "available. LOWER it when someone tells you to chill or you sense you're " +
+      "dominating; raise it when the room clearly wants more. Direct addressing is " +
+      "still judged rather than forcing a reply.",
     parameters: Type.Object({
       level: Type.Number({ description: "Chattiness 1-10." }),
     }),
