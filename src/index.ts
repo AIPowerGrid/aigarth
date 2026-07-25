@@ -11,8 +11,8 @@ import { log } from "./util/log.js";
 import { messages, banVotes, reminders } from "./store/db.js";
 import { isCommand } from "./discord/gating.js";
 import { handleCommand } from "./discord/commands.js";
-import { screenMessage, hasUntrustedLink, openBanVote, handleVoteReaction } from "./discord/scam.js";
-import { createCoalescer, type Coalescer } from "./discord/coalescer.js";
+import { handleVoteReaction } from "./discord/scam.js";
+import { createCoalescer, type Activity, type Coalescer } from "./discord/coalescer.js";
 import { processActivity } from "./discord/turn.js";
 import { renderMentions } from "./discord/render.js";
 import { PROMPT_VERSION } from "./prompts.js";
@@ -42,6 +42,7 @@ coalescer = createCoalescer({
   settleMs: config.convSettleMs,
   settleAddressedMs: config.convSettleAddressedMs,
 });
+const recentActivities = new Map<string, Activity>();
 
 client.once(Events.ClientReady, (c) => {
   log.info("aigarth online", {
@@ -84,7 +85,7 @@ client.once(Events.ClientReady, (c) => {
   }, 30_000).unref();
 });
 
-// Ingestion: per-message bookkeeping (history, commands, scam, eligibility, signals),
+// Ingestion: per-message bookkeeping (history, commands, eligibility, signals),
 // then hand the channel's current state to the coalescer.
 client.on(Events.MessageCreate, async (message) => {
   try {
@@ -118,30 +119,12 @@ client.on(Events.MessageCreate, async (message) => {
       return;
     }
 
-    // Deterministic scam screen (guild messages only). Fail-closed → community vote.
-    if (message.guild && inTracked) {
-      const verdict = screenMessage(message.content, {
-        authorName: message.member?.displayName ?? message.author.displayName ?? message.author.username,
-        guildId: message.guild.id,
-        trustedAuthor:
-          config.adminUserIds.includes(message.author.id) ||
-          !!message.member?.permissions.has(PermissionFlagsBits.ManageMessages),
-      });
-      if (verdict.flagged) {
-        await openBanVote(message, verdict.reason);
-        return;
-      }
-    }
-
     // Respond only in active (non-readonly) tracked channels + DMs.
     const respondable = !message.guild
       ? true
       : (config.channels.length === 0 || config.channels.includes(message.channelId)) &&
         !config.readonlyChannels.includes(message.channelId);
-    if (!respondable) {
-      log.info("skip: not respondable", { ch: message.channelId });
-      return;
-    }
+    if (!inTracked) return;
 
     const readableContent = renderMentions(client, message);
     const content = renderMentions(client, message, { stripBot: true });
@@ -164,10 +147,6 @@ client.on(Events.MessageCreate, async (message) => {
     const isDM = !message.guild;
     // Structural context only — even these signals are judged by the AI later.
     const addressed = mentioned || repliedToBot || named || isDM;
-    // A link to an unrecognized host (guild only — ban polls need a guild) → route to
-    // aigarth's judgment so it can ban-poll a shady one.
-    const untrustedLink = !!message.guild && hasUntrustedLink(message.content);
-
     // A bare "@aigarth" (addressed, no text) is a real ping; unaddressed empty isn't.
     if (!content && message.attachments.size === 0 && !addressed) return;
 
@@ -175,10 +154,15 @@ client.on(Events.MessageCreate, async (message) => {
       .filter((a) => (a.contentType ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(a.name ?? ""))
       .map((a) => a.url);
 
-    coalescer.noteActivity({
-      message, inTracked, content, modTarget,
-      mentioned, repliedToBot, named, isDM, addressed, untrustedLink, imageUrls,
-    });
+    const activity: Activity = {
+      message, inTracked, respondable, content, modTarget,
+      mentioned, repliedToBot, named, isDM, addressed, imageUrls,
+    };
+    if (message.guild) {
+      recentActivities.set(message.id, activity);
+      setTimeout(() => recentActivities.delete(message.id), 120_000).unref();
+    }
+    coalescer.noteActivity(activity);
   } catch (err) {
     log.error("ingest error", { err: String(err) });
   }
@@ -202,10 +186,21 @@ client.on(Events.MessageReactionRemove, (r, u) => onReaction(r, u, false));
 client.on(Events.MessageDelete, (message) => {
   const vote = banVotes.activeForSourceMessage(message.id);
   if (vote) {
-    log.warn("flagged scam source deleted; ban poll and captured evidence remain active", {
+    log.warn("moderation source deleted; ban poll and captured evidence remain active", {
       sourceMessageId: message.id,
       voteMessageId: vote.message_id,
       target: vote.target_id,
+    });
+    recentActivities.delete(message.id);
+    return;
+  }
+  const activity = recentActivities.get(message.id);
+  if (activity) {
+    recentActivities.delete(message.id);
+    coalescer.noteActivity({ ...activity, deleted: true });
+    log.warn("recently deleted message queued for AI safety review", {
+      sourceMessageId: message.id,
+      target: activity.message.author.id,
     });
   }
 });

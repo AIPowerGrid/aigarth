@@ -35,19 +35,22 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
   const message = act.message;
   const modTarget = act.modTarget;
   const inTracked = act.inTracked;
+  // Immutable before any Discord fetch or Grid call. A flash deletion must not
+  // erase or retarget the evidence while the model is deciding.
+  const focusModerationSnapshot = {
+    userId: message.author.id,
+    messageId: message.id,
+    evidence: message.content || act.content,
+  };
+  const requestedModerationSnapshot = {
+    userId: modTarget.author.id,
+    messageId: modTarget.id,
+    evidence: modTarget.content,
+  };
   let typingTimer: ReturnType<typeof setInterval> | null = null;
   let typingChannel: any = null;
 
   try {
-    if (!canSend(channelId)) {
-      log.warn("per-channel reply ceiling hit; skipping", { channel: channelId });
-      return;
-    }
-    if (!act.addressed && !passCooldown(message.author.id)) {
-      log.debug("per-user attention cooldown; skipping", { channel: channelId, user: message.author.id });
-      return;
-    }
-
     const room = await getRoomContext(client, message, {
       limit: config.discordContextLimit,
       maxChars: config.historyMaxChars,
@@ -76,8 +79,28 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       repliedToBot: act.repliedToBot,
       named: act.named,
       isDM: act.isDM,
-      untrustedLink: act.untrustedLink,
+      deleted: act.deleted,
     });
+    const moderationReview = decision.action === "moderate";
+    if (!moderationReview && !act.respondable) {
+      log.info("skip: not respondable", { ch: channelId });
+      return;
+    }
+    // Conversation rate limits must not suppress a model-requested security
+    // review. They apply only to visible participation.
+    if (!moderationReview) {
+      if (!canSend(channelId)) {
+        log.warn("per-channel reply ceiling hit; skipping", { channel: channelId });
+        return;
+      }
+      if (!act.addressed && !passCooldown(message.author.id)) {
+        log.debug("per-user attention cooldown; skipping", {
+          channel: channelId,
+          user: message.author.id,
+        });
+        return;
+      }
+    }
     const useFullAgent = shouldUseFullAgent(decision, act.content);
     log.info("gate", {
       ch: channelId, action: decision.action, emoji: decision.emoji,
@@ -103,6 +126,12 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       return;
     }
     if (decision.action === "ignore") return;
+
+    // A model-requested safety review always concerns the focus author/message.
+    // A human asking "@aigarth ban this" in a reply targets the replied-to message.
+    const moderationTarget = moderationReview
+      ? focusModerationSnapshot
+      : requestedModerationSnapshot;
 
     const startTyping = (channel: any): void => {
       typingChannel = channel;
@@ -219,19 +248,17 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       },
       startBanPoll: async (reason: string) => {
         if (!message.guild) return;
-        requireCurrentRoom();
         await openModerationVote({
-          channel: message.channel, guildId: message.guild.id, targetUserId: modTarget.author.id,
-          action: "ban", reason, evidence: modTarget.content, targetMsgId: modTarget.id,
+          channel: message.channel, guildId: message.guild.id, targetUserId: moderationTarget.userId,
+          action: "ban", reason, evidence: moderationTarget.evidence, targetMsgId: moderationTarget.messageId,
         });
         sentAnything = true;
       },
       startDeletePoll: async (reason: string) => {
         if (!message.guild) return;
-        requireCurrentRoom();
         await openModerationVote({
-          channel: message.channel, guildId: message.guild.id, targetUserId: modTarget.author.id,
-          action: "delete", reason, evidence: modTarget.content, targetMsgId: modTarget.id,
+          channel: message.channel, guildId: message.guild.id, targetUserId: moderationTarget.userId,
+          action: "delete", reason, evidence: moderationTarget.evidence, targetMsgId: moderationTarget.messageId,
         });
         sentAnything = true;
       },
@@ -298,12 +325,24 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
             messagesAfterFocus: room.messagesAfterFocus,
             roomDescription: room.roomDescription,
             spokeRecently: botSpokeRecently(channelId),
+            moderationReview,
             actions,
             onImage: (u) => pendingImages.push(u),
             onToolStart: (tool) => {
               if (!NO_TYPING.has(tool)) startTyping(message.channel);
             },
           });
+
+    // Moderation review is intentionally silent. Its only visible output is a
+    // community poll opened through one of the bounded moderation tools.
+    if (moderationReview) {
+      log.info("moderation review done", {
+        ch: channelId,
+        pollOpened: sentAnything,
+        error: result.error,
+      });
+      return;
+    }
 
     // A 120B/tool turn can take long enough for the room to change. Never post a
     // response composed against stale state without letting the judge see the
@@ -329,7 +368,7 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
         repliedToBot: act.repliedToBot,
         named: act.named,
         isDM: act.isDM,
-        untrustedLink: act.untrustedLink,
+        deleted: act.deleted,
       });
       log.info("stale turn revalidated", {
         ch: channelId,

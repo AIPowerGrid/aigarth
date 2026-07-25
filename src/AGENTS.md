@@ -9,17 +9,20 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 
 - `index.ts` — Discord client + `MessageCreate`/reaction handlers. **Conversation coalescing:
   ONE attention per channel.** Per-message ingestion (store history w/ mentions resolved →
-  `!`commands → scam screen → eligibility → compute signals) feeds `noteActivity`; a short
+  `!`commands → eligibility → compute signals) feeds `noteActivity`; a short
   settle timer (`CONV_SETTLE_MS`, shorter when addressed) then runs **one** `runChannelTurn`
   per channel (serialized; re-runs if activity arrived during it), responding to the channel's
   *current* state — so it structurally cannot post turns out of order. `runChannelTurn`
   fetches live Discord context, then checks the **participation judge** (`discord/gate.ts`,
-  the configured capable Grid model → respond/react/ignore) for the marked focus.
+  the configured capable Grid model → respond/react/moderate/ignore) for the marked focus.
   @-mention/reply/DM/name use are strong context but never bypass judgment. On `respond`, a
   simple grounded reply may come directly from the judge; nuanced/tool work builds the
   per-turn **Discord surface** (`react`/`reply_in_thread`/polls/`snooze`/presence/nickname/
   `create_poll`/`remind`) and calls `runTurn` (hard-timeout-aborted via `TURN_TIMEOUT_MS`).
   The room is fetched and judged again before posting if it changed during a slow turn.
+  `moderate` runs a silent full-agent review with only ban/delete poll tools exposed.
+  Recent user activities are retained in memory for two minutes so a `MessageDelete` can
+  requeue the exact focus for model review; ordinary chatter cannot bury that review.
   Reminder delivery + housekeeping timers + reaction vote tallying also live here.
 - `agent.ts` — `runTurn`: builds the persona prompt + per-turn context (who/where/history +
   how the message relates to the bot), constructs the pi `Agent`, registers tools (Discord
@@ -39,6 +42,8 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 - `contextEval.ts` — live Grid eval for summary continuity and memory privacy behavior.
 - `conversationEval.ts` — live, multi-message behavioral simulation for speak/silence and
   final visible replies. `discordContextEval.ts` is the read-only real-Discord context check.
+- `moderationEval.ts` — live model/tool test for clear scams and benign lookalikes in
+  silent moderation-review mode.
 - `discord/`, `skills/`, `images/`, `docs/`, `store/`, `util/` — subsystems, each owned in
   its own AGENTS.md.
 - `smoke.ts` — build-and-run smoke check (`npm run smoke`).
@@ -53,6 +58,10 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
   full tool-capable agent and then `replyEditor.ts`; `turn.ts` posts its final text. Reactions,
   threads, moderation, and other Discord side effects remain tools supplied by `index.ts`.
   An empty or ungrounded final edit means deliberate silence.
+- **Moderation is model-judged and mechanically bounded.** There is no keyword/domain
+  classifier. The gate may choose `moderate` from full context; `runTurn` then exposes only
+  `start_ban_poll` and `start_delete_poll`, suppresses all text, and permits no direct ban.
+  Evidence snapshots, human quorum, deduplication, and enforcement remain deterministic.
 - **Addressed messages bypass the per-user cooldown, not participation judgment.** A mention /
   reply-to-bot (even with the ping off — detected via the fetched referenced message) / DM is
   considered promptly, then the AI may still ignore it. The reply ceiling applies to everyone.
@@ -97,7 +106,7 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 
 ## Child DOX Index
 
-- [discord/AGENTS.md](discord/AGENTS.md) — mechanical backstops, scam screen + community votes, commands.
+- [discord/AGENTS.md](discord/AGENTS.md) — AI moderation routing, mechanical vote backstops, commands.
 - [skills/AGENTS.md](skills/AGENTS.md) — pi AgentTools the model calls.
 - [images/AGENTS.md](images/AGENTS.md) — image model/style/LoRA registry + Horde client.
 - [docs/AGENTS.md](docs/AGENTS.md) — agentic markdown doc store (read/grep/index).

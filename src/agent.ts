@@ -35,8 +35,8 @@ import { editReply } from "./replyEditor.js";
 
 
 // Stable, persona-only system prompt (separated from per-turn context per audit).
-function personaPrompt(): string {
-  return [
+function personaPrompt(moderationReview = false): string {
+  const lines = [
     `You are ${config.botName}, the AI assistant for the AI Power Grid (AIPG) community.`,
     "You run ON AIPG itself — distributed GPU workers earning AIPG for inference.",
     "You are living proof the Grid works: a real agent on decentralized infra.",
@@ -127,7 +127,26 @@ function personaPrompt(): string {
     "- `snooze` (lurk a while) if asked to chill or you're dominating; `set_chattiness`",
     "  to self-tune how much you jump in. `web_search` for things you don't know.",
     "  `create_poll` for a quick community vote; `remind` someone after a delay.",
-  ].join("\n");
+  ];
+  if (moderationReview) {
+    lines.push(
+      "",
+      "SILENT MODERATION REVIEW MODE:",
+      "- Do not converse, react, investigate with unrelated tools, or produce a public reply.",
+      "- Your only possible actions are `start_ban_poll`, `start_delete_poll`, or no tool.",
+      "- Judge the complete behavior and room context, not a keyword, brand name, or link type.",
+      "- Start a ban poll when a good-faith interpretation is unlikely and the focus appears to be",
+      "  an impersonator, scammer, phisher, wallet drainer, malware/raid actor, persistent spammer,",
+      "  or severely abusive user. Impersonators often pose as generic support or a trusted person",
+      "  without saying AIPG, then move someone to a DM, account, invite, form, site, or payment.",
+      "- Start a delete poll when the post is clearly unsafe/spam but the author does not clearly",
+      "  warrant a ban. If context is ambiguous, quoted, joking, critical, or plausibly benign,",
+      "  call no tool. A link, invite, new account, or mention of support alone is not proof.",
+      "- Never punish disagreement, criticism, annoying behavior, or someone reporting a scam.",
+      "- A poll is only a proposal; humans decide. Give a short, factual reason based on evidence.",
+    );
+  }
+  return lines.join("\n");
 }
 
 export interface TurnContext {
@@ -159,6 +178,9 @@ export interface TurnContext {
   roomDescription?: string;
   /** The bot posted in this channel recently (so it shouldn't dominate). */
   spokeRecently?: boolean;
+  /** Silent model-decided safety review: only moderation tools are exposed and
+   * no assistant text is delivered. */
+  moderationReview?: boolean;
   /** Side-effecting Discord actions the model drives via tools (reply/react/etc.). */
   actions: DiscordActions;
   /** Called for each image a skill produces, so the discord layer can attach it. */
@@ -182,6 +204,11 @@ export interface TurnResult {
 }
 
 function buildTools(ctx: TurnContext): AgentTool[] {
+  if (ctx.moderationReview) {
+    return ctx.actions.canModerate
+      ? [makeBanPollTool(ctx.actions), makeDeletePollTool(ctx.actions)]
+      : [];
+  }
   const tags = () => [`user:${ctx.userId}`, `channel:${ctx.channelId}`];
   const chanCtx = () => ({ channelId: ctx.channelId, channelName: ctx.channelName });
   const tools = [
@@ -243,7 +270,11 @@ function contextBlock(ctx: TurnContext): string {
 
   // How the latest message relates to you — the key signal for whether to engage.
   let relation: string;
-  if (ctx.isDM) relation = `This is a direct message to you from ${ctx.userName}.`;
+  if (ctx.moderationReview) {
+    relation =
+      `This is a silent safety review of ${ctx.userName}'s focus message. ` +
+      `Use the room context to decide whether a community moderation poll is warranted.`;
+  } else if (ctx.isDM) relation = `This is a direct message to you from ${ctx.userName}.`;
   else if (ctx.mentioned) relation = `${ctx.userName} mentioned you directly — they're talking to you.`;
   else if (ctx.repliedToBot) relation = `${ctx.userName} is replying to something you said.`;
   else if (ctx.named) relation = `${ctx.userName} used your name; the judge decided the focus still warrants your input.`;
@@ -285,12 +316,17 @@ function contextBlock(ctx: TurnContext): string {
         `judge already considered them and decided the focus is still worth answering. Respect any ` +
         `correction or changed state in those newer lines; do not pretend the focus is still the newest.`
       : "",
-    `\nRespond to the marked FOCUS only. The rest of the transcript is current context — do ` +
-      `NOT answer other questions in it, restart an older topic, contradict an established ` +
-      `constraint with generic advice, or invent facts to make the answer sound complete.`,
-    `\nDecide what to do and act with your tools: reply, react, reply_in_thread, ` +
-      `propose a moderation poll — or stay silent by calling nothing. Sound like a ` +
-      `real person, not a bot.`,
+    ctx.moderationReview
+      ? `\nReview only the marked FOCUS. Do not reply. Call a moderation poll tool only if the ` +
+        `evidence and context make it clearly warranted; otherwise call nothing.`
+      : `\nRespond to the marked FOCUS only. The rest of the transcript is current context — do ` +
+        `NOT answer other questions in it, restart an older topic, contradict an established ` +
+        `constraint with generic advice, or invent facts to make the answer sound complete.`,
+    ctx.moderationReview
+      ? ""
+      : `\nDecide what to do and act with your tools: reply, react, reply_in_thread, ` +
+        `propose a moderation poll — or stay silent by calling nothing. Sound like a ` +
+        `real person, not a bot.`,
   ].filter(Boolean);
   return parts.join("\n");
 }
@@ -316,7 +352,7 @@ function applySampling(payload: unknown): unknown {
 export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
   const agent = new Agent({
     initialState: {
-      systemPrompt: personaPrompt(),
+      systemPrompt: personaPrompt(!!ctx.moderationReview),
       model: gridModel(),
       tools: buildTools(ctx),
     },
@@ -415,7 +451,7 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
       else if (Array.isArray(c)) text = c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("");
     }
   }
-  if (!error) {
+  if (!error && !ctx.moderationReview) {
     const edited = await editReply({
       transcript: ctx.history ?? "",
       focus: ctx.text,
@@ -431,7 +467,7 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
     text = edited;
   }
   return {
-    finalText: text.trim(),
+    finalText: ctx.moderationReview ? "" : text.trim(),
     images,
     error,
     delivery: threadDraft ? "thread" : "channel",

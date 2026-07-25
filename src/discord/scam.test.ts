@@ -1,69 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  screenMessage,
-  hasUntrustedLink,
-  openBanVote,
-  handleVoteReaction,
-} from "./scam.js";
+import { openModerationVote, handleVoteReaction } from "./scam.js";
 
-test("screenMessage: flags unofficial Discord invites but allows AIPG's published invite", () => {
-  assert.equal(screenMessage("join support https://discord.gg/abc123").flagged, true);
-  assert.equal(screenMessage("discord.gg/another-server").flagged, true);
-  assert.equal(screenMessage("join us https://discord.gg/W9D8j6HCtC").flagged, false);
-});
-
-test("screenMessage: flags support impersonation with a non-AIPG destination", () => {
-  assert.equal(
-    screenMessage("Contact official support at https://aipg-helpdesk.example/verify").flagged,
-    true,
-  );
-  assert.equal(
-    screenMessage("Resolve your issue here: https://ticket-center.example", {
-      authorName: "AI Power Grid Support",
-    }).flagged,
-    true,
-  );
-  assert.equal(
-    screenMessage("For support use https://aipowergrid.io/docs").flagged,
-    false,
-  );
-  assert.equal(
-    screenMessage("For support join https://t.me/aipowergrid").flagged,
-    false,
-  );
-  assert.equal(
-    screenMessage("I need help debugging https://paste.example/log").flagged,
-    false,
-  );
-  assert.equal(
-    screenMessage("Contact support at https://external-ticket.example", {
-      authorName: "AIPG Moderator",
-      trustedAuthor: true,
-    }).flagged,
-    false,
-  );
-});
-
-test("screenMessage: flags wallet-drainer phrasing + an untrusted link", () => {
-  assert.equal(screenMessage("claim your airdrop now at http://sketchy-airdrop.xyz/go").flagged, true);
-  assert.equal(screenMessage("connect your wallet at https://aipg.art").flagged, false);
-});
-
-test("screenMessage: leaves normal messages (incl. trusted links) alone", () => {
-  assert.equal(screenMessage("hey how's the grid today").flagged, false);
-  assert.equal(screenMessage("read the docs: https://aipowergrid.io/docs").flagged, false);
-  // drainer phrasing WITHOUT a link is not enough (fail-closed on uncertainty)
-  assert.equal(screenMessage("i wish i could claim your airdrop lol").flagged, false);
-});
-
-test("hasUntrustedLink: unknown host true; allowlisted / no link false", () => {
-  assert.equal(hasUntrustedLink("check http://totally-legit-airdrop.xyz"), true);
-  assert.equal(hasUntrustedLink("see https://github.com/AIPowerGrid/aigarth"), false);
-  assert.equal(hasUntrustedLink("no links here at all"), false);
-});
-
-test("openBanVote preserves redacted evidence after a flash deletion and deduplicates", async () => {
+test("model-requested ban vote preserves redacted evidence and deduplicates", async () => {
   const payloads: any[] = [];
   const channel = {
     send: async (payload: any) => {
@@ -75,34 +14,33 @@ test("openBanVote preserves redacted evidence after a flash deletion and dedupli
       };
     },
   };
-  const message: any = {
-    id: "flash-source-1",
-    content: "Official support: https://steal-wallet.example/connect or discord.gg/evil ```spoofed",
-    guild: { id: "flash-guild" },
-    author: { id: "flash-user" },
+  const vote = {
     channel,
+    guildId: "flash-guild",
+    targetUserId: "flash-user",
+    action: "ban" as const,
+    reason: "Context indicates support impersonation through @recovery_desk.",
+    evidence: "message @recovery_desk immediately https://example.invalid ```spoofed",
+    targetMsgId: "flash-source-1",
   };
 
-  const opening = openBanVote(message, "Support impersonation.");
-  message.content = "";
+  const opening = openModerationVote(vote);
+  vote.evidence = "";
   assert.equal(await opening, "opened");
   assert.equal(payloads.length, 1);
   const description = payloads[0].embeds[0].data.description as string;
-  assert.match(description, /Official support: \[link removed\]/);
-  assert.doesNotMatch(description, /steal-wallet/);
-  assert.match(description, /\[Discord invite removed\]/);
-  assert.doesNotMatch(description, /discord\.gg/);
+  assert.match(description, /message \[account removed\] immediately \[link removed\]/);
+  assert.doesNotMatch(description, /example\.invalid/);
+  assert.doesNotMatch(description, /recovery_desk/);
   assert.doesNotMatch(description, /```spoofed/);
   assert.match(description, /needs the Discord `Ban Members` permission/);
 
-  const vote = (await import("../store/db.js")).banVotes.get("flash-vote-1");
-  assert.equal(vote?.action, "ban");
-  assert.equal(vote?.target_msg_id, "flash-source-1");
+  const stored = (await import("../store/db.js")).banVotes.get("flash-vote-1");
+  assert.equal(stored?.action, "ban");
+  assert.equal(stored?.target_msg_id, "flash-source-1");
+  assert.doesNotMatch(stored?.reason ?? "", /recovery_desk/);
 
-  const duplicate = await openBanVote(
-    { ...message, id: "flash-source-2", content: "https://discord.gg/evil" },
-    "Second scam post.",
-  );
+  const duplicate = await openModerationVote({ ...vote, targetMsgId: "flash-source-2" });
   assert.equal(duplicate, "duplicate");
   assert.equal(payloads.length, 1);
 });

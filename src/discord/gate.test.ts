@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { enforceGateInvariants, parseVerdict, shouldUseFullAgent } from "./gate.js";
 
-test("parseVerdict: strict JSON respond / ignore / react", () => {
+test("parseVerdict: strict JSON respond / ignore / react / moderate", () => {
   const respond = parseVerdict(
     '{"action":"respond","needs_tools":false,"reply":"yeah, I’m here","reason":"direct question"}',
   );
@@ -13,6 +13,10 @@ test("parseVerdict: strict JSON respond / ignore / react", () => {
   const r = parseVerdict('{"action":"react","emoji":"🔥"}');
   assert.equal(r?.action, "react");
   assert.equal(r?.emoji, "🔥");
+  const moderate = parseVerdict('{"action":"moderate","reason":"possible impersonation"}');
+  assert.equal(moderate?.action, "moderate");
+  assert.equal(moderate?.reason, "possible impersonation");
+  assert.equal(shouldUseFullAgent(moderate!, "message me on this other account"), true);
 });
 
 test("parseVerdict: missing plain reply safely falls back to the full agent", () => {

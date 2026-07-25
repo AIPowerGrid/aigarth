@@ -1,5 +1,5 @@
 /**
- * Gate eval — measures the engagement gate (respond / react / ignore) against a set
+ * Gate eval — measures the engagement gate (respond / react / moderate / ignore) against a set
  * of labeled fixtures, so a prompt change can be scored instead of eyeballed in the
  * channel. Hits the live grid gate model. Run:  npm run eval
  *
@@ -15,11 +15,11 @@ interface Case {
   history?: string;
   latest: string;
   recentlyEngaged?: boolean;
-  untrustedLink?: boolean;
   mentioned?: boolean;
   repliedToBot?: boolean;
   named?: boolean;
   isDM?: boolean;
+  deleted?: boolean;
   focusIsLatest?: boolean;
   messagesAfterFocus?: number;
   chattiness?: number;
@@ -77,6 +77,34 @@ const CASES: Case[] = [
     accept: ["ignore"],
   },
   { name: "generic room greeting", latest: "gm everyone ☀️", accept: ["ignore", "react"] },
+  {
+    name: "generic support impersonator without AIPG wording",
+    history: "alice: my wallet connection keeps failing",
+    latest: "I am support, message @recovery_desk privately and they will synchronize it",
+    deleted: true,
+    accept: ["moderate"],
+  },
+  {
+    name: "credential theft without a link",
+    latest: "I can recover it for you, DM me your seed phrase and do not tell anyone",
+    accept: ["moderate"],
+  },
+  {
+    name: "scam warning is not the scam",
+    latest: "Heads up: ignore anyone claiming to be support and asking for your seed phrase",
+    accept: ["ignore"],
+  },
+  {
+    name: "ordinary unrelated community invite is not automatically bannable",
+    latest: "our open source rendering group is here if anyone wants it: https://discord.gg/example",
+    accept: ["ignore"],
+  },
+  {
+    name: "ordinary deleted message is not automatically bannable",
+    latest: "never mind, pasted that in the wrong channel",
+    deleted: true,
+    accept: ["ignore"],
+  },
   {
     name: "direct question withdrawn before response",
     history:
@@ -164,7 +192,7 @@ async function main() {
       repliedToBot: !!c.repliedToBot,
       named: !!c.named,
       isDM: !!c.isDM,
-      untrustedLink: !!c.untrustedLink,
+      deleted: !!c.deleted,
     });
     const actionOk = c.accept.includes(d.action);
     const modeOk =

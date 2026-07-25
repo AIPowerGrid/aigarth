@@ -76,10 +76,11 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
   participation judge (`src/discord/gate.ts`). Addressing is context, never an automatic
   response trigger. The judge may compose a short transcript-grounded reply in the same
   pass; nuanced analysis, external facts, skills, and Discord actions go through the full
-  agent and reply editor. `react` is applied directly; `ignore` stays silent. Both model
+  agent and reply editor. `react` is applied directly; `moderate` enters a silent,
+  moderation-tool-only agent review; `ignore` stays silent. Both model
   stages use strict JSON where applicable and fail closed. What stays deterministic is
-  mechanical: `!` commands, cooldowns, coalescing, the per-channel reply ceiling, and the
-  fail-closed scam screen.
+  mechanical: `!` commands, cooldowns, coalescing, the per-channel reply ceiling, evidence
+  redaction, vote quorum, deduplication, and enforcement.
 - **Current Discord is authoritative, bounded context.** At attention time Aigarth fetches
   up to `DISCORD_CONTEXT_LIMIT` messages that a human can currently see in the channel or
   thread, including other bots, reply targets, attachments, embeds, reactions, stickers,
@@ -91,11 +92,14 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
   `!forget`. Credential-shaped values are redacted before persistence.
 - **Moderation is community-decided, never the AI alone.** The AI may only *propose*
   bans/deletes via `start_ban_poll` / `start_delete_poll`; they enact only on
-  `BAN_VOTE_THRESHOLD` human ✅ votes. The deterministic screen also proposes an explicit
-  ban for unofficial Discord invites and support impersonation pointing off AIPG-owned
-  destinations. Evidence is captured before a flash deletion, duplicate active polls are
-  suppressed, and the bot never self-votes. The production Discord role must have
+  `BAN_VOTE_THRESHOLD` human ✅ votes. The capable participation judge may route any
+  suspicious message into a silent tool-only review; the model judges intent and room
+  context without keyword/domain rules, then opens a poll or does nothing. Evidence is
+  captured before a flash deletion, duplicate active polls are suppressed, and the bot
+  never self-votes. The production Discord role must have
   `Ban Members` and sit above target roles; startup warns if enforcement is unavailable.
+  Recently deleted messages are requeued with an immutable snapshot for AI review; deletion
+  is evidence of timing, not proof of abuse.
 
 ## Work Guidance
 
@@ -111,11 +115,13 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
 
 - `npm run typecheck` (tsc, no emit) — the fast gate.
 - `npm test` — hermetic unit tests (`node:test`, `*.test.ts`): the coalescer state
-  machine, text/parse helpers, gate verdict parsing, scam screen. No network/secrets.
+  machine, text/parse helpers, gate verdict parsing, and vote enforcement. No network/secrets.
 - `npm audit` must report zero known vulnerabilities before release.
-- `npm run eval` — scores the engagement **gate** (respond/react/ignore) against labeled
+- `npm run eval` — scores the engagement **gate** (respond/react/moderate/ignore) against labeled
   fixtures on the live grid; add a case when a real misfire appears. Bump `PROMPT_VERSION`
   (`src/prompts.ts`) when you change the persona or gate prompt, then re-run.
+- `npm run eval:moderation` — proves the live tool-only moderation agent opens ban polls
+  for clear impersonation/credential theft, emits no text, and ignores benign lookalikes.
 - `npm run eval:conversation` — runs multi-message conversations through the real gate and
   selected reply path, checking both appropriate silence and the visible answer.
 - `npm run eval:discord-context` — read-only integration check against a configured live

@@ -190,7 +190,6 @@ async function simulate(scenario: Scenario): Promise<{ ok: boolean; detail: stri
     repliedToBot: !!scenario.repliedToBot,
     named: !!scenario.named,
     isDM: !!scenario.isDM,
-    untrustedLink: false,
   });
   if (decision.action !== scenario.expected) {
     return {

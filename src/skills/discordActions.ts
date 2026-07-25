@@ -95,7 +95,11 @@ export function makeBanPollTool(actions: DiscordActions): AgentTool {
     description:
       "Open a COMMUNITY VOTE to ban this user. You are not banning anyone — you're " +
       "proposing it; the user is only banned if enough humans vote ✅. Use ONLY for " +
-      "clear scams, raids, wallet-drainer links, or seriously abusive behavior. When " +
+      "clear scams, impersonation/social engineering, phishing, raids, wallet drainers, " +
+      "malware, persistent spam, or seriously abusive behavior. Judge intent and context; " +
+      "scammers may pose as generic support or a trusted person without saying AIPG and " +
+      "may use any link, invite, DM, form, account, or payment destination. A link, invite, " +
+      "new account, disagreement, criticism, or annoying behavior is not enough alone. When " +
       "the triggering message is a reply, the vote targets the replied-to user. Never " +
       "use it to win an argument or against people just being annoying.",
     parameters: Type.Object({

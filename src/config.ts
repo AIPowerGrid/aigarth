@@ -13,11 +13,6 @@ function list(name: string): string[] {
     .filter(Boolean);
 }
 
-function listOr(name: string, fallback: string[]): string[] {
-  const values = list(name);
-  return values.length ? values : fallback;
-}
-
 function num(name: string, def: number): number {
   const v = process.env[name];
   return v ? Number(v) : def;
@@ -37,10 +32,6 @@ export const config = {
   /** Channels it stores history from but never responds in. */
   readonlyChannels: list("BOT_READONLY_CHANNELS"),
   adminUserIds: list("ADMIN_USER_IDS"),
-  /** Exact invite codes published by AIPG. Other Discord invites are treated
-   * as high-confidence impersonation/raid signals. */
-  officialDiscordInviteCodes: listOr("OFFICIAL_DISCORD_INVITE_CODES", ["W9D8j6HCtC"]),
-
   // Grid — the agent's brain runs on our OWN grid (dogfooding).
   gridApiKey: req("GRID_API_KEY"),
   gridV1Url: process.env.GRID_V1_URL ?? "https://api.aipowergrid.io/v1",
@@ -135,12 +126,12 @@ export const config = {
   userMemoryMax: num("USER_MEMORY_MAX", 30),
   // Hard backstop: max bot messages per channel per rolling minute (all kinds).
   maxRepliesPerMin: num("MAX_REPLIES_PER_MIN", 4),
-  // Community moderation votes (scam screen + the AI's ban/delete polls). Human
-  // votes only; the bot never self-votes. 4 ✅ enact, 3 ❌ dismiss.
+  // Community moderation votes proposed by AI tools. Human votes only; the bot
+  // never self-votes. 4 ✅ enact, 3 ❌ dismiss.
   banVoteThreshold: num("BAN_VOTE_THRESHOLD", 4),
   dismissVoteThreshold: num("DISMISS_VOTE_THRESHOLD", 3),
   banVoteTtlMs: num("BAN_VOTE_TTL_MS", 86_400_000),
-  // Outcome of a successful scam vote: "timeout" (reversible) or "ban".
+  // Backward-compatible outcome for legacy persisted action="moderate" votes.
   scamOutcome: (process.env.SCAM_OUTCOME ?? "timeout") as "timeout" | "ban",
 };
 

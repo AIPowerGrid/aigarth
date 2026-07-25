@@ -7,6 +7,9 @@ export type EventMessage = OmitPartialGroupDMChannel<Message>;
 export interface Activity {
   message: EventMessage;
   inTracked: boolean;
+  /** False for history-only channels: safety review may run, visible
+   * participation may not. */
+  respondable: boolean;
   content: string;
   modTarget: Message;
   mentioned: boolean;
@@ -14,7 +17,9 @@ export interface Activity {
   named: boolean;
   isDM: boolean;
   addressed: boolean;
-  untrustedLink: boolean;
+  /** Discord reported this focus deleted shortly after posting. It receives a
+   * protected review slot, but deletion alone is never a guilty verdict. */
+  deleted?: boolean;
   imageUrls: string[];
 }
 
@@ -73,12 +78,15 @@ export function createCoalescer(opts: {
       st = { timer: null, running: false, pending: null };
       chanStates.set(channelId, st);
     }
-    const upgradeToAddressed = act.addressed && !st.pending?.addressed;
-    // Newest wins EXCEPT a pending addressed message is sticky vs later unaddressed.
-    if (!st.pending || act.addressed || !st.pending.addressed) st.pending = act;
+    const protectedFocus = !!(act.addressed || act.deleted);
+    const pendingProtected = !!(st.pending?.addressed || st.pending?.deleted);
+    const upgradeToProtected = protectedFocus && !pendingProtected;
+    // Newest wins except a pending addressed or flash-deleted focus is sticky
+    // against ordinary chatter.
+    if (!st.pending || protectedFocus || !pendingProtected) st.pending = act;
     if (st.running) return;
     // Upgraded to addressed → expedite: cancel the longer unaddressed timer.
-    if (upgradeToAddressed && st.timer) {
+    if (upgradeToProtected && st.timer) {
       clearTimeout(st.timer);
       st.timer = null;
     }

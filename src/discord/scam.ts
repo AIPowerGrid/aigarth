@@ -1,197 +1,27 @@
 import {
-  type Message,
   type Client,
   EmbedBuilder,
   PermissionFlagsBits,
 } from "discord.js";
 import { config } from "../config.js";
 import { banVotes, type BanVote, type VoteAction } from "../store/db.js";
-import { extractUrls, hostOf } from "../util/net.js";
+import { extractUrls } from "../util/net.js";
 import { log } from "../util/log.js";
 
 /**
- * Scam moderation — rebuilt per the audit.
- *
- * Old design: an LLM classified scams and FAILED OPEN TO BAN on any error
- * (an LLM hiccup → innocent user ban vote), used substring host "trust"
- * (github.com.evil.io passed), and the bot auto-cast a vote.
- *
- * New design:
- *  - Deterministic-first, FAIL CLOSED: we only flag on concrete signals
- *    (unofficial invite links, support impersonation + a non-AIPG destination,
- *    or known wallet-drainer phrasing + a link). Any uncertainty → don't flag.
- *  - Registered-host allow/deny via real URL parsing, never substrings.
- *  - The bot does NOT self-vote. Humans decide.
- *  - High-confidence deterministic detections request a ban, but the bot never
- *    enacts one without the configured human vote threshold.
- *  - Votes are persisted (survive restarts) and handled via raw reaction events.
+ * Community moderation engine. Aigarth's model decides whether to call the
+ * moderation tools; this module never classifies message content. It snapshots
+ * redacted evidence, persists votes, and enforces only after human quorum.
  */
-
-const TRUSTED_HOSTS = [
-  "aipowergrid.io",
-  "aipg.art",
-  "aipg.chat",
-  "aipg.music",
-  "github.com",
-  "etherscan.io",
-  "basescan.org",
-  "coingecko.com",
-  "discord.com",
-  "x.com",
-  "twitter.com",
-];
-
-const DRAINER_PHRASES = [
-  "free nitro",
-  "claim your airdrop",
-  "connect your wallet",
-  "verify your wallet",
-  "claim reward",
-  "double your",
-  "steam gift",
-];
-
-const OFFICIAL_SUPPORT_HOSTS = [
-  "aipowergrid.io",
-  "aipg.art",
-  "aipg.chat",
-  "aipg.music",
-];
-
-const SUPPORT_CTA = [
-  /\b(?:official|verified|authorized)\s+(?:(?:aipg|ai power grid)\s+)?(?:support|admin|moderator|mod|help\s*desk|staff)\b/i,
-  /\b(?:aipg|ai power grid)\s+(?:support|admin|moderator|mod|help\s*desk|staff)\b/i,
-  /\b(?:contact|message|dm|reach|speak to|chat with)\s+(?:(?:our|the|official|aipg|ai power grid)\s+){0,2}(?:support|admin|moderator|mod|help\s*desk|staff)\b/i,
-  /\b(?:open|create|submit)\s+(?:a\s+)?(?:support\s+)?ticket\b/i,
-  /\b(?:support|help)\s+(?:portal|desk|agent|team|link|here)\b/i,
-  /\b(?:need help|having (?:an )?issue|for help)\b.{0,80}\b(?:contact|message|dm|visit|click|open)\b/i,
-];
 
 const INVITE_RE =
   /\b(?:https?:\/\/)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com\/invite)\/([a-z0-9-]+)/gi;
 
-function registeredHost(host: string): string {
-  const parts = host.split(".");
-  return parts.length >= 2 ? parts.slice(-2).join(".") : host;
-}
-
-function isTrusted(host: string): boolean {
-  const reg = registeredHost(host);
-  return TRUSTED_HOSTS.some((t) => reg === t);
-}
-
-function inviteCodes(content: string): string[] {
-  return [...content.matchAll(INVITE_RE)].map((match) => match[1].toLowerCase());
-}
-
-function isOfficialInviteCode(code: string): boolean {
-  return config.officialDiscordInviteCodes.some((official) => official.toLowerCase() === code);
-}
-
-function isOfficialSupportUrl(raw: string, guildId?: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return false;
-  }
-  const host = url.hostname.toLowerCase();
-  if (OFFICIAL_SUPPORT_HOSTS.includes(registeredHost(host))) return true;
-  if (
-    host === "github.com" &&
-    url.pathname.split("/").filter(Boolean)[0]?.toLowerCase() === "aipowergrid"
-  ) {
-    return true;
-  }
-  const normalizedPath = url.pathname.replace(/\/+$/, "").toLowerCase();
-  if (
-    ((host === "x.com" || host === "twitter.com") && normalizedPath === "/aipowergrid") ||
-    (host === "t.me" && normalizedPath === "/aipowergrid") ||
-    ((host === "youtube.com" || host === "www.youtube.com") && normalizedPath === "/@aipowergrid")
-  ) {
-    return true;
-  }
-  const code = inviteCodes(raw)[0];
-  if (code && isOfficialInviteCode(code)) return true;
-  if (host === "discord.com" && guildId && url.pathname.startsWith(`/channels/${guildId}/`)) {
-    return true;
-  }
-  return false;
-}
-
-function supportIdentity(name: string): boolean {
-  const normalized = name.toLowerCase().replace(/[._-]+/g, " ");
-  const brand = /\b(?:aipg|ai power grid)\b/.test(normalized);
-  const authority = /\b(?:support|admin|moderator|mod|help\s*desk)\b/.test(normalized);
-  return brand && authority;
-}
-
-export interface ScamVerdict {
-  flagged: boolean;
-  reason: string;
-}
-
-export interface ScamContext {
-  authorName?: string;
-  guildId?: string;
-  trustedAuthor?: boolean;
-}
-
-/** Does the message contain a link to a host NOT on the trusted allowlist? Used to
- *  route link posts to aigarth's judgment so it can ban-poll a shady one (a normal
- *  link from a regular isn't necessarily bad — the LLM decides). */
-export function hasUntrustedLink(content: string): boolean {
-  return extractUrls(content)
-    .some((url) => {
-      const host = hostOf(url);
-      return !!host && !isTrusted(host) && !isOfficialSupportUrl(url);
-    });
-}
-
-/** Deterministic screen. Fails closed (no signal → not flagged). */
-export function screenMessage(content: string, context: ScamContext = {}): ScamVerdict {
-  const lower = content.toLowerCase();
-  const urls = extractUrls(content);
-  const untrusted = urls
-    .filter((url) => {
-      const host = hostOf(url);
-      return !!host && !isTrusted(host) && !isOfficialSupportUrl(url, context.guildId);
-    })
-    .map(hostOf)
-    .filter((host): host is string => !!host);
-
-  // AIPG publishes one exact invite. Any other Discord invite is a classic
-  // impersonation/raid vector, including scheme-less links.
-  const unofficialInvite = inviteCodes(content).find((code) => !isOfficialInviteCode(code));
-  if (unofficialInvite) {
-    return { flagged: true, reason: "Posted an unofficial Discord invite link." };
-  }
-
-  // "AIPG Support" accounts and support/admin calls-to-action may only direct
-  // people to AIPG-owned destinations. This catches flash-and-delete support
-  // impersonation without treating ordinary links or requests for help as scams.
-  const supportClaim =
-    !context.trustedAuthor &&
-    (supportIdentity(context.authorName ?? "") || SUPPORT_CTA.some((pattern) => pattern.test(content)));
-  const unofficialSupportUrl = urls.find((url) => !isOfficialSupportUrl(url, context.guildId));
-  if (supportClaim && unofficialSupportUrl) {
-    const host = hostOf(unofficialSupportUrl) ?? "unknown host";
-    return {
-      flagged: true,
-      reason: `Impersonated AIPG/support while directing users to an unofficial destination (${host}).`,
-    };
-  }
-  // Wallet-drainer phrasing alongside an untrusted link = high confidence.
-  const drainer = DRAINER_PHRASES.find((p) => lower.includes(p));
-  if (drainer && untrusted.length > 0) {
-    return { flagged: true, reason: `Wallet-drainer phrasing ("${drainer}") with an untrusted link.` };
-  }
-  return { flagged: false, reason: "" };
-}
-
 function redact(content: string): string {
   let c = content.replace(INVITE_RE, "[Discord invite removed]");
   for (const u of extractUrls(content)) c = c.split(u).join("[link removed]");
+  c = c.replace(/<@!?\d+>/g, "[mention removed]");
+  c = c.replace(/(^|[\s([])@[a-z0-9_]{4,32}\b/gi, "$1[account removed]");
   // Keep attacker-controlled evidence inside the poll's code block.
   c = c.replace(/`/g, "'");
   return c.length > 400 ? c.slice(0, 400) + "…" : c;
@@ -218,9 +48,8 @@ const enforcingVotes = new Set<string>();
 /**
  * Open a persisted community vote and seed its ✅/❌ reactions. The bot never
  * self-votes; `config.banVoteThreshold` human ✅ enact the action, threshold ❌
- * dismiss it. Used by the deterministic scam screen and the AI's
- * `start_ban_poll` / `start_delete_poll` tools
- * — the model proposes, the community decides.
+ * dismiss it. The model proposes through `start_ban_poll` /
+ * `start_delete_poll`; the community decides.
  */
 export async function openModerationVote(v: ModerationVote): Promise<VoteOpenResult> {
   if (!v.channel || !("send" in v.channel)) return "unavailable";
@@ -254,9 +83,10 @@ export async function openModerationVote(v: ModerationVote): Promise<VoteOpenRes
     const canEnforceBan =
       v.action !== "ban" ||
       !!v.channel.guild?.members?.me?.permissions.has(PermissionFlagsBits.BanMembers);
+    const safeReason = redact(v.reason);
     const desc = [
       lead,
-      `**Why:** ${v.reason}`,
+      `**Why:** ${safeReason}`,
       v.evidence ? `\n**Message (redacted):**\n\`\`\`${redact(v.evidence)}\`\`\`` : "",
       !canEnforceBan
         ? "\n**Enforcement warning:** Aigarth's role still needs the Discord `Ban Members` permission."
@@ -274,35 +104,19 @@ export async function openModerationVote(v: ModerationVote): Promise<VoteOpenRes
       voteMsg.channelId,
       v.guildId,
       v.targetUserId,
-      v.reason,
+      safeReason,
       v.action,
       v.targetMsgId ?? null,
     );
     log.info("moderation vote opened", {
       action: v.action,
       target: v.targetUserId,
-      reason: v.reason,
+      reason: safeReason,
     });
     return "opened";
   } finally {
     openingVotes.delete(key);
   }
-}
-
-/** Deterministic high-confidence scam screen → an explicit community ban poll.
- * The message snapshot is captured before awaiting Discord, so a flash deletion
- * cannot erase the redacted evidence shown to voters. */
-export async function openBanVote(message: Message, reason: string): Promise<VoteOpenResult> {
-  if (!message.guild) return "unavailable";
-  return openModerationVote({
-    channel: message.channel,
-    guildId: message.guild.id,
-    targetUserId: message.author.id,
-    action: "ban",
-    reason,
-    evidence: message.content,
-    targetMsgId: message.id,
-  });
 }
 
 /**
@@ -359,7 +173,7 @@ async function enforce(client: Client, vote: BanVote): Promise<boolean> {
       return true;
     }
     const guild = await client.guilds.fetch(vote.guild_id);
-    // 'ban' polls always ban; the scam screen ('moderate') honors SCAM_OUTCOME.
+    // New 'ban' polls always ban; legacy 'moderate' rows honor SCAM_OUTCOME.
     const ban = vote.action === "ban" || config.scamOutcome === "ban";
     if (ban) {
       // Ban by ID so leaving the server after posting cannot evade a passed vote.

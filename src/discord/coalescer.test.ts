@@ -35,6 +35,17 @@ test("a pending ADDRESSED message is sticky — later chatter can't bury an @-me
   assert.deepEqual(seen, ["mention"]); // the dropped-mention bug we fixed
 });
 
+test("a flash-deleted message gets a protected review slot", async () => {
+  const seen: string[] = [];
+  const c = createCoalescer({ run: async (a) => void seen.push(a.content), settleMs: 40, settleAddressedMs: 40 });
+  const deleted = act("c1", false, "deleted");
+  deleted.deleted = true;
+  c.noteActivity(deleted);
+  c.noteActivity(act("c1", false, "later chatter"));
+  await sleep(70);
+  assert.deepEqual(seen, ["deleted"]);
+});
+
 test("serialized per channel — never concurrent, re-runs for activity that arrived mid-turn", async () => {
   const seen: string[] = [];
   let inFlight = 0;
