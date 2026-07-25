@@ -24,7 +24,7 @@ export async function maybeRefreshChannelSummary(channelId: string): Promise<voi
   const batch = messages.summaryBatch(
     channelId,
     current?.through_message_id ?? 0,
-    config.historyWindow,
+    Math.max(config.historyWindow, config.discordContextLimit),
     config.historyMaxChars,
     config.summaryBatchSize,
   );

@@ -139,6 +139,11 @@ scrubStoredContent();
 const insMsg = db.prepare(
   "INSERT OR IGNORE INTO messages (message_id, channel_id, author_name, author_id, content, is_bot, ts) VALUES (?,?,?,?,?,?,?)",
 );
+const syncMsg = db.prepare(
+  `UPDATE messages
+   SET channel_id = ?, author_name = ?, author_id = ?, content = ?, is_bot = ?, ts = ?
+   WHERE message_id = ?`,
+);
 const selRecent = db.prepare(
   `SELECT id, message_id, author_name, author_id, content, is_bot, ts
    FROM messages
@@ -180,6 +185,24 @@ export const messages = {
     messageId: string | null = null,
   ) {
     insMsg.run(messageId, channelId, author, authorId, clamp(redactStoredContent(content)), isBot ? 1 : 0, Date.now());
+  },
+  /** Upsert a Discord-visible message by its stable Discord ID. This keeps edits,
+   * attachment/reaction metadata, and messages observed after an offline period
+   * current without duplicating the bot's own posts. */
+  sync(
+    channelId: string,
+    author: string,
+    content: string,
+    authorId: string | null,
+    isBot: boolean,
+    messageId: string,
+    ts: number,
+  ) {
+    const safe = clamp(redactStoredContent(content));
+    const updated = syncMsg.run(channelId, author, authorId, safe, isBot ? 1 : 0, ts, messageId);
+    if (!updated.changes) {
+      insMsg.run(messageId, channelId, author, authorId, safe, isBot ? 1 : 0, ts);
+    }
   },
   recent(channelId: string, limit: number, excludeMessageId: string | null = null): StoredMessage[] {
     return (selRecent.all(channelId, excludeMessageId, excludeMessageId, limit) as StoredMessage[]).reverse();

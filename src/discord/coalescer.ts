@@ -11,6 +11,7 @@ export interface Activity {
   modTarget: Message;
   mentioned: boolean;
   repliedToBot: boolean;
+  named: boolean;
   isDM: boolean;
   addressed: boolean;
   untrustedLink: boolean;

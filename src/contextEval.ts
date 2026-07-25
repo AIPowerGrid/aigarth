@@ -6,7 +6,10 @@ import { channelSummaries, messages, userMemory } from "./store/db.js";
 import { config } from "./config.js";
 
 const channel = `context-eval-${Date.now()}`;
-for (let i = 1; i <= 30; i++) {
+// The live Discord window keeps 50 messages verbatim. Seed enough activity to
+// push the durable facts behind that window so this actually exercises summary
+// rollover instead of accidentally asserting against still-verbatim context.
+for (let i = 1; i <= 70; i++) {
   const content =
     i === 3
       ? "alice: Project Atlas is a media worker dashboard."

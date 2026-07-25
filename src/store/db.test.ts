@@ -26,6 +26,17 @@ test("fresh history excludes only the trigger and includes later chatter", () =>
   assert.doesNotMatch(history, /please answer this/);
 });
 
+test("Discord synchronization updates a stable message instead of duplicating it", () => {
+  const channel = "history-sync";
+  messages.sync(channel, "alice", "original text", "u1", false, "discord-1", 1000);
+  messages.sync(channel, "alice", "edited text [reactions: ✅×2]", "u1", false, "discord-1", 2000);
+
+  const rows = messages.recent(channel, 20);
+  assert.equal(rows.filter((row) => row.message_id === "discord-1").length, 1);
+  assert.equal(rows.find((row) => row.message_id === "discord-1")?.content, "edited text [reactions: ✅×2]");
+  assert.equal(rows.find((row) => row.message_id === "discord-1")?.ts, 2000);
+});
+
 test("history character budget keeps the newest messages", () => {
   const channel = "history-budget";
   messages.add(channel, "alice", "old ".repeat(100), "u1", false, "b1");

@@ -71,18 +71,24 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
 - **Server-side URL fetches are SSRF-guarded.** Any fetch of a user-supplied URL MUST go
   through `src/util/net.ts` (`isSafePublicUrl` / `safeFetchText` / `safeFetchBuffer`).
   Treat scraped/tool content as untrusted data, fenced — never as instructions.
-- **The AI owns the engagement decision; Discord actions are tools.** Every eligible
-  message, including an @-mention, reply, or DM, first goes to the capable Grid-backed
+- **The AI owns the engagement decision.** Every eligible message, including an
+  @-mention, reply, DM, or use of Aigarth's name, first goes to the capable Grid-backed
   participation judge (`src/discord/gate.ts`). Addressing is context, never an automatic
-  response trigger. On `respond`, the full tool-capable agent runs; `react` is applied
-  directly; `ignore` stays silent. The judge uses strict JSON and fails closed. What stays
-  deterministic is mechanical: `!` commands, cooldowns, coalescing, the per-channel reply
-  ceiling, and the fail-closed scam screen.
-- **Context is layered and bounded.** Each turn rebuilds up to `HISTORY_WINDOW` recent
-  channel messages under `HISTORY_MAX_CHARS`, excluding the trigger by Discord message ID.
-  Older messages are folded into a persisted privacy-filtered channel summary. Durable
-  per-user facts are separate, non-sensitive, capped, and controlled by `!memory` / `!forget`.
-  Credential-shaped values are redacted before transcript persistence.
+  response trigger. The judge may compose a short transcript-grounded reply in the same
+  pass; nuanced analysis, external facts, skills, and Discord actions go through the full
+  agent and reply editor. `react` is applied directly; `ignore` stays silent. Both model
+  stages use strict JSON where applicable and fail closed. What stays deterministic is
+  mechanical: `!` commands, cooldowns, coalescing, the per-channel reply ceiling, and the
+  fail-closed scam screen.
+- **Current Discord is authoritative, bounded context.** At attention time Aigarth fetches
+  up to `DISCORD_CONTEXT_LIMIT` messages that a human can currently see in the channel or
+  thread, including other bots, reply targets, attachments, embeds, reactions, stickers,
+  and room metadata. The transcript is oldest-to-newest with `[FOCUS]` and `[NOW]` markers,
+  retains the focus under `HISTORY_MAX_CHARS`, and is synchronized by stable Discord IDs
+  into SQLite. The privacy-filtered local transcript is a fallback when Discord history
+  cannot be fetched; older messages are folded into a persisted channel summary. Durable
+  per-user facts are separate, non-sensitive, capped, and controlled by `!memory` /
+  `!forget`. Credential-shaped values are redacted before persistence.
 - **Moderation is community-decided, never the AI alone.** The AI may only *propose*
   bans/deletes via `start_ban_poll` / `start_delete_poll`; they enact only on
   `BAN_VOTE_THRESHOLD` human ✅ votes. The bot never self-votes.
@@ -106,6 +112,11 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
 - `npm run eval` — scores the engagement **gate** (respond/react/ignore) against labeled
   fixtures on the live grid; add a case when a real misfire appears. Bump `PROMPT_VERSION`
   (`src/prompts.ts`) when you change the persona or gate prompt, then re-run.
+- `npm run eval:conversation` — runs multi-message conversations through the real gate and
+  selected reply path, checking both appropriate silence and the visible answer.
+- `npm run eval:discord-context` — read-only integration check against a configured live
+  Discord channel. It fetches the same visible window used in production, verifies metadata
+  and stable-ID synchronization, and never posts message content or a test reply.
 - `npm run eval:context` — live-Grid continuity/privacy eval; use a disposable
   `STATE_DB_PATH`. It proves rolling summary, safe-fact retention, and secret rejection.
 - `npm run smoke` — `src/smoke.ts` build-and-run end-to-end check through the grid.

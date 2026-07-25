@@ -89,6 +89,10 @@ export const config = {
   // Behavior
   historyWindow: num("HISTORY_WINDOW", 20),
   historyMaxChars: num("HISTORY_MAX_CHARS", 24000),
+  // At attention time, synchronize this many currently visible Discord
+  // messages. This includes missed/offline messages, other bots, replies,
+  // attachments, embeds, and reactions before the judge or full agent runs.
+  discordContextLimit: num("DISCORD_CONTEXT_LIMIT", 50),
   // Older messages are folded into a compact durable channel summary. Summaries
   // never replace the recent verbatim window; they provide continuity behind it.
   gridSummaryModel:

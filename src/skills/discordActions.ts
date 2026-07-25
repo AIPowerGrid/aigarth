@@ -4,10 +4,10 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 /**
  * Discord actions as tools.
  *
- * Everything aigarth does in a channel is a tool call — there is no separate
- * "should I respond?" gate and no magic text channel. Speaking, reacting,
- * branching to a thread, and proposing moderation are all things the model
- * chooses to do (or not) by calling these. Staying silent = calling nothing.
+ * Discord side effects selected by the full agent. Plain text is returned by
+ * the agent and posted by the Discord turn layer after grounding and stale-room
+ * validation. A thread tool selects the destination, but its text is likewise
+ * deferred until that final posting boundary.
  *
  * The discord layer (index.ts) supplies the actual side-effecting callbacks
  * per-turn (bound to the triggering message/channel); these factories just wrap
@@ -80,7 +80,7 @@ export function makeThreadReplyTool(actions: DiscordActions): AgentTool {
     execute: async (_id, params: any) => {
       try {
         await actions.replyInThread(String(params.text ?? ""), params.thread_name ? String(params.thread_name) : undefined);
-        return { content: [{ type: "text", text: "sent in thread" }], details: {} };
+        return { content: [{ type: "text", text: "thread reply queued for final review" }], details: {} };
       } catch (e) {
         return { content: [{ type: "text", text: `thread reply failed: ${e}` }], details: {} };
       }

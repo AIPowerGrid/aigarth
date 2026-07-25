@@ -25,6 +25,7 @@ const client = new Client({
 });
 
 const TRACKED = new Set([...config.channels, ...config.readonlyChannels]);
+const BOT_NAME_RE = new RegExp(`\\b${config.botName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
 
 // One attention per channel: the coalescer schedules a single turn per channel and
 // hands it to processActivity (gate → agent → post). See discord/coalescer.ts.
@@ -121,6 +122,7 @@ client.on(Events.MessageCreate, async (message) => {
       return;
     }
 
+    const readableContent = renderMentions(client, message);
     const content = renderMentions(client, message, { stripBot: true });
 
     // Moderation/react/reply target: the replied-to message if this is a reply, else
@@ -137,9 +139,10 @@ client.on(Events.MessageCreate, async (message) => {
       !!client.user &&
       ((!!message.reference?.messageId && modTarget !== message && modTarget.author?.id === client.user.id) ||
         message.mentions.repliedUser?.id === client.user.id);
+    const named = BOT_NAME_RE.test(readableContent);
     const isDM = !message.guild;
     // Structural context only — even these signals are judged by the AI later.
-    const addressed = mentioned || repliedToBot || isDM;
+    const addressed = mentioned || repliedToBot || named || isDM;
     // A link to an unrecognized host (guild only — ban polls need a guild) → route to
     // aigarth's judgment so it can ban-poll a shady one.
     const untrustedLink = !!message.guild && hasUntrustedLink(message.content);
@@ -153,7 +156,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     coalescer.noteActivity({
       message, inTracked, content, modTarget,
-      mentioned, repliedToBot, isDM, addressed, untrustedLink, imageUrls,
+      mentioned, repliedToBot, named, isDM, addressed, untrustedLink, imageUrls,
     });
   } catch (err) {
     log.error("ingest error", { err: String(err) });

@@ -12,18 +12,22 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
   `!`commands → scam screen → eligibility → compute signals) feeds `noteActivity`; a short
   settle timer (`CONV_SETTLE_MS`, shorter when addressed) then runs **one** `runChannelTurn`
   per channel (serialized; re-runs if activity arrived during it), responding to the channel's
-  *current* state — so it structurally can't answer stale messages or post out of order.
-  `runChannelTurn` first checks the **participation judge** (`discord/gate.ts`, the configured
-  capable Grid model → respond/react/ignore) for every message; @-mention/reply/DM are strong
-  context but never bypass judgment. Only on `respond` does it build the per-turn **Discord surface** (`reply`/`react`/
-  `reply_in_thread`/polls/`snooze`/presence/nickname/`create_poll`/`remind`) and call `runTurn`
-  (hard-timeout-aborted via `TURN_TIMEOUT_MS`). Posted text is run through `unwrapToolCallText`
-  (models sometimes emit a reply as literal JSON). Reminder-delivery + housekeeping timers +
-  reaction vote tallying.
+  *current* state — so it structurally cannot post turns out of order. `runChannelTurn`
+  fetches live Discord context, then checks the **participation judge** (`discord/gate.ts`,
+  the configured capable Grid model → respond/react/ignore) for the marked focus.
+  @-mention/reply/DM/name use are strong context but never bypass judgment. On `respond`, a
+  simple grounded reply may come directly from the judge; nuanced/tool work builds the
+  per-turn **Discord surface** (`react`/`reply_in_thread`/polls/`snooze`/presence/nickname/
+  `create_poll`/`remind`) and calls `runTurn` (hard-timeout-aborted via `TURN_TIMEOUT_MS`).
+  The room is fetched and judged again before posting if it changed during a slow turn.
+  Reminder delivery + housekeeping timers + reaction vote tallying also live here.
 - `agent.ts` — `runTurn`: builds the persona prompt + per-turn context (who/where/history +
   how the message relates to the bot), constructs the pi `Agent`, registers tools (Discord
-  actions + skills), applies human-sounding sampling (`onPayload`). Returns `finalText` only
-  as an addressed-only safety net — real output goes out via the `reply` tool's side effect.
+  actions + skills), applies human-sounding sampling (`onPayload`), collects bounded tool
+  evidence, and sends the draft through `replyEditor.ts`.
+- `replyEditor.ts` — fail-closed final grounding pass for full-agent replies. It verifies the
+  draft against the current transcript and tool evidence, removes invented or contradicted
+  claims, and emits only the exact final reply.
 - `grid.ts` — the Grid as a `pi-ai` `Model<"openai-completions">` (custom `baseUrl`).
 - `config.ts` — the ONE typed env surface (`config`, `isAdmin`); defaults + `.env.template`.
 - `memory.ts` — long-term memory behind a `MemoryStore` interface; hindsight when configured,
@@ -33,6 +37,8 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 - `memoryExtraction.ts` — strict-JSON, privacy-conservative extraction of up to two
   user-volunteered durable facts after successful interactions; honors per-user opt-out.
 - `contextEval.ts` — live Grid eval for summary continuity and memory privacy behavior.
+- `conversationEval.ts` — live, multi-message behavioral simulation for speak/silence and
+  final visible replies. `discordContextEval.ts` is the read-only real-Discord context check.
 - `discord/`, `skills/`, `images/`, `docs/`, `store/`, `util/` — subsystems, each owned in
   its own AGENTS.md.
 - `smoke.ts` — build-and-run smoke check (`npm run smoke`).
@@ -42,16 +48,21 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 - **Persona vs context split:** `personaPrompt()` is stable system text (who you are + how
   acting = calling tools); per-turn channel / history / message / **how it relates to the
   bot** go in `contextBlock()`. Keep them separate (audit fix for robotic replies).
-- **The model acts only through tools.** Speaking is the `reply` tool, not free text (free
-  text is private scratch); reacting/threading/moderation likewise. Silence = no tool call.
-  `index.ts` supplies the per-turn `DiscordActions` callbacks; `agent.ts` wraps them as tools.
+- **Speaking is deliberate and grounded.** The judge may emit a short plain reply only when
+  the visible room already contains everything needed. Nuanced or external work runs the
+  full tool-capable agent and then `replyEditor.ts`; `turn.ts` posts its final text. Reactions,
+  threads, moderation, and other Discord side effects remain tools supplied by `index.ts`.
+  An empty or ungrounded final edit means deliberate silence.
 - **Addressed messages bypass the per-user cooldown, not participation judgment.** A mention /
   reply-to-bot (even with the ping off — detected via the fetched referenced message) / DM is
   considered promptly, then the AI may still ignore it. The reply ceiling applies to everyone.
-- **Don't duplicate or stale the current message in context.** Incoming messages are stored
-  with Discord message IDs. At execution time, `turn.ts` rebuilds bounded recent history,
-  excluding only the trigger; this lets a sticky addressed turn see intervening chatter.
-  **Chattiness** (`settings`) sets the participation judge's threshold; it is not random.
+- **Use the live room, not an ingest snapshot.** Incoming messages are stored with Discord
+  IDs, but at execution time `discord/context.ts` fetches the current visible window and
+  synchronizes it by stable ID. `[FOCUS]` marks the message under consideration and `[NOW]`
+  marks the visible end, so a still-open direct question can survive unrelated chatter while
+  a withdrawn, answered, corrected, or obsolete request is ignored. If the room changes
+  during a slow full-agent turn, `turn.ts` re-fetches and re-judges before posting.
+  **Chattiness** (`settings`) sets the judge's threshold; it is not random.
 - **Readable I/O.** Inbound mentions/emoji are resolved to names (`@alice`, `#general`,
   `:smile:`) for both the model and stored history; the model never sees raw `<@id>`. Outbound
   messages never ping (`SAFE_MENTIONS`: no reply ping, no @everyone/@here/role) — the bot
@@ -78,7 +89,11 @@ typed config, and the subsystems (skills, image registry, doc store, sqlite stat
 
 ## Verification
 
-- `npm run typecheck` is the gate (no unit tests yet).
+- `npm run typecheck`, `npm test`, and `npm run build` are deterministic release gates.
+- `npm run eval` covers labeled engagement decisions on the live Grid.
+- `npm run eval:conversation` covers the selected response engine and final visible reply.
+- `npm run eval:discord-context` proves the production Discord fetch/metadata/sync path
+  without posting. `npm run eval:context` covers summary continuity and memory privacy.
 
 ## Child DOX Index
 

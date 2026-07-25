@@ -8,8 +8,8 @@
  */
 import { runTurn } from "./agent.js";
 
-// Capture whatever the agent "says" through its reply tool (or the addressed
-// safety-net free text), without touching Discord.
+// Supply inert Discord actions and inspect the final grounded text without
+// touching Discord.
 let said = "";
 const r = await runTurn({
   channelId: "smoke",
@@ -38,13 +38,13 @@ const r = await runTurn({
   },
 });
 
-const reply = said || r.finalText;
+const reply = r.finalText || said;
 console.log("reply:", JSON.stringify(reply));
-console.log("error:", r.error, "| images:", r.images.length, "| via tool:", said.length > 0);
+console.log("error:", r.error, "| images:", r.images.length, "| delivery:", r.delivery);
 
 if (r.error || !reply) {
   console.error("❌ SMOKE FAIL — agent returned empty/error (brain not reachable?)");
   process.exit(1);
 }
-console.log("✅ SMOKE OK — agent produced a real reply through the grid");
+console.log("✅ SMOKE OK — agent produced a grounded reply through the grid");
 process.exit(0);

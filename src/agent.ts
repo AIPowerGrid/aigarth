@@ -31,6 +31,7 @@ import {
 } from "./skills/discordActions.js";
 import { messages, channelStatus, userMemory } from "./store/db.js";
 import { log } from "./util/log.js";
+import { editReply } from "./replyEditor.js";
 
 
 // Stable, persona-only system prompt (separated from per-turn context per audit).
@@ -56,6 +57,13 @@ function personaPrompt(): string {
     "- Default to 1-3 short sentences and no more than 120 words. Go longer only when",
     "  someone explicitly asks for detail, analysis, instructions, or troubleshooting.",
     "- Just answer or react to what was actually said; don't fish for a task.",
+    "- Treat the current Discord transcript as authoritative about who said what and",
+    "  what constraints the room has established. Don't overwrite it with generic",
+    "  advice or suggest a path someone just said is unavailable unless a tool gives",
+    "  concrete evidence that corrects them.",
+    "- Never invent roadmap status, team activity, firmware releases, adoption, or",
+    "  implementation details. If neither the room nor a tool verifies it, frame it as",
+    "  uncertainty instead of filling the gap with a plausible story.",
     "",
     "Use your tools rather than guessing:",
     "- For factual AIPG questions (tokenomics, rewards, the grid, contracts, workers),",
@@ -142,7 +150,13 @@ export interface TurnContext {
    *  whether/how to engage (replaces the old regex "addressed" verdict). */
   mentioned?: boolean;
   repliedToBot?: boolean;
+  named?: boolean;
   isDM?: boolean;
+  /** Whether newer visible Discord messages arrived after the focus message. */
+  focusIsLatest?: boolean;
+  messagesAfterFocus?: number;
+  /** Current Discord channel/thread name, topic, and category when visible. */
+  roomDescription?: string;
   /** The bot posted in this channel recently (so it shouldn't dominate). */
   spokeRecently?: boolean;
   /** Side-effecting Discord actions the model drives via tools (reply/react/etc.). */
@@ -155,10 +169,13 @@ export interface TurnContext {
 }
 
 export interface TurnResult {
-  /** The model's final free text — a SAFETY NET only (used if it forgot to call
-   *  `reply` while clearly addressed); the real message goes out via the reply tool. */
+  /** The final grounded text. The Discord layer is the sole posting authority. */
   finalText: string;
   images: string[];
+  /** The model may request a thread, but delivery is deferred until after editing
+   *  and stale-room revalidation. */
+  delivery: "channel" | "thread";
+  threadName?: string;
   /** True if the grid call failed (worker offline / error) — distinct from an
    *  intentional silent turn. */
   error: boolean;
@@ -229,6 +246,7 @@ function contextBlock(ctx: TurnContext): string {
   if (ctx.isDM) relation = `This is a direct message to you from ${ctx.userName}.`;
   else if (ctx.mentioned) relation = `${ctx.userName} mentioned you directly — they're talking to you.`;
   else if (ctx.repliedToBot) relation = `${ctx.userName} is replying to something you said.`;
+  else if (ctx.named) relation = `${ctx.userName} used your name; the judge decided the focus still warrants your input.`;
   else
     // The participation judge already found that a response improves the room.
     relation =
@@ -242,6 +260,7 @@ function contextBlock(ctx: TurnContext): string {
 
   const parts = [
     `You're in the #${ctx.channelName} channel as ${config.botName}, a regular here.`,
+    ctx.roomDescription ? `Discord room details: ${ctx.roomDescription}` : "",
     mood ? `Your current mood: ${mood} — let it color your tone (don't announce it).` : "",
     hereStatus ? `What's been going on in here: ${hereStatus}` : "",
     known.length
@@ -252,15 +271,23 @@ function contextBlock(ctx: TurnContext): string {
     getLastImage(ctx.channelId)
       ? "You have a recent image in this channel — if someone says 'that but with…' / 'give me that image with…', edit it with remix_last_image (no URL needed)."
       : "",
-    history ? `\nRecent messages (oldest→newest; lines tagged "(you)" are YOUR own past messages):\n${history}` : "",
+    history
+      ? `\nCurrent visible Discord messages (oldest→newest; [FOCUS] is what you are answering, ` +
+        `[NOW] is the current end, and "(you)" marks YOUR past messages):\n${history}`
+      : "",
     ctx.imageUrls && ctx.imageUrls.length
       ? `\n${ctx.userName} attached image(s) — call describe_image (or remix_image) on a URL to use one:\n${ctx.imageUrls.join("\n")}`
       : "",
-    `\nLatest — ${ctx.userName}: ${ctx.text}`,
+    `\nFocus message — ${ctx.userName}: ${ctx.text}`,
     `\n${relation}`,
-    `\nRespond to THIS latest message only. The transcript above is background — do ` +
-      `NOT answer older messages in it (even unanswered questions) unless the latest ` +
-      `message itself refers back to them.`,
+    ctx.focusIsLatest === false
+      ? `\n${ctx.messagesAfterFocus ?? 0} visible message(s) came after the focus. The participation ` +
+        `judge already considered them and decided the focus is still worth answering. Respect any ` +
+        `correction or changed state in those newer lines; do not pretend the focus is still the newest.`
+      : "",
+    `\nRespond to the marked FOCUS only. The rest of the transcript is current context — do ` +
+      `NOT answer other questions in it, restart an older topic, contradict an established ` +
+      `constraint with generic advice, or invent facts to make the answer sound complete.`,
     `\nDecide what to do and act with your tools: reply, react, reply_in_thread, ` +
       `propose a moderation poll — or stay silent by calling nothing. Sound like a ` +
       `real person, not a bot.`,
@@ -303,11 +330,10 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
 
   let text = "";
   let error = false;
-  let spoke = false; // did the model produce any user-facing output (reply/react/post)?
   const images: string[] = [];
-  const SPEAKING = new Set([
-    "reply_in_thread", "react", "create_poll", "start_ban_poll", "start_delete_poll",
-  ]);
+  const toolEvidence: string[] = [];
+  let threadDraft = "";
+  let threadName: string | undefined;
 
   agent.subscribe((event: any) => {
     switch (event.type) {
@@ -324,11 +350,26 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
           args: JSON.stringify(event.args ?? {}).slice(0, 300),
           channel: ctx.channelId,
         });
-        if (SPEAKING.has(event.toolName)) spoke = true;
         ctx.onToolStart?.(event.toolName);
+        if (event.toolName === "reply_in_thread") {
+          threadDraft = String(event.args?.text ?? "").trim().slice(0, 4_000);
+          const requestedName = String(event.args?.thread_name ?? "").trim();
+          threadName = requestedName ? requestedName.slice(0, 90) : undefined;
+        }
         break;
       }
       case "tool_execution_end": {
+        const blocks = event.result?.content;
+        if (Array.isArray(blocks)) {
+          const evidence = blocks
+            .filter((block: any) => block?.type === "text" && typeof block.text === "string")
+            .map((block: any) => block.text)
+            .join("\n")
+            .trim();
+          if (evidence) {
+            toolEvidence.push(`[${event.toolName ?? "tool"}]\n${evidence.slice(0, 3_000)}`);
+          }
+        }
         // Any skill can surface images via details.images (generate_image, crypto_chart…).
         // Hand each to the discord layer so it can attach them to the next reply.
         const imgs = event.result?.details?.images;
@@ -356,16 +397,6 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
   }, config.turnTimeoutMs);
   try {
     await agent.prompt(contextBlock(ctx));
-    // Forced-reply backstop: runTurn is only called when we intend to respond, so if
-    // the model ended its turn having said NOTHING (no reply/react, no text — a known
-    // gpt-oss quirk), nudge it once to actually answer instead of dropping the inquiry.
-    if (!spoke && !text.trim()) {
-      log.info("empty turn — nudging the model to reply", { channel: ctx.channelId });
-      await agent.prompt(
-        "You ended your turn without saying anything, but the person is waiting on a reply. " +
-          "Now write a genuine, helpful answer to the latest message as your reply.",
-      );
-    }
   } catch {
     error = true;
   } finally {
@@ -384,5 +415,26 @@ export async function runTurn(ctx: TurnContext): Promise<TurnResult> {
       else if (Array.isArray(c)) text = c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("");
     }
   }
-  return { finalText: text.trim(), images, error };
+  if (!error) {
+    const edited = await editReply({
+      transcript: ctx.history ?? "",
+      focus: ctx.text,
+      focusUserName: ctx.userName,
+      draft: threadDraft || text.trim(),
+      toolEvidence,
+      focusIsLatest: ctx.focusIsLatest !== false,
+      messagesAfterFocus: ctx.messagesAfterFocus ?? 0,
+      directlyAddressed: !!(ctx.mentioned || ctx.repliedToBot || ctx.named || ctx.isDM),
+    });
+    // The editor retries malformed/failed calls and returns deliberate silence
+    // rather than allowing an unreviewed draft onto Discord.
+    text = edited;
+  }
+  return {
+    finalText: text.trim(),
+    images,
+    error,
+    delivery: threadDraft ? "thread" : "channel",
+    threadName,
+  };
 }

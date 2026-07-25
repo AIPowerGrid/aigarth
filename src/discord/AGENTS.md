@@ -1,18 +1,27 @@
-# src/discord — ingestion gate + mechanical backstops + moderation
+# src/discord — live room context + participation + mechanical backstops
 
 ## Purpose
 
-The pre-agent layer: the capable engagement **judge**, mechanical
-cost/abuse limits, the deterministic scam screen, the community-vote moderation engine, and
-`!` commands. Every eligible message is judged; @-mention / reply / DM are contextual signals,
-not automatic response paths. The full chat agent (`../agent.ts`) only runs on `respond`.
+The Discord behavior layer: live human-visible room context, the capable engagement **judge**,
+turn revalidation, mechanical cost/abuse limits, the deterministic scam screen, the
+community-vote moderation engine, and `!` commands. Every eligible focus is judged;
+@-mention / reply / DM / name use are contextual signals, not automatic response paths.
 
 ## Ownership
 
 - `gate.ts` — `decideEngagement`: a `gridGateModel` call (defaults to the same 120B model as
-  chat) that returns strict JSON for `respond` | `react` | `ignore` on every message. It
-  receives structural and conversational context, treats silence as healthy, and fails CLOSED
-  on errors, timeout, or malformed output. The full agent runs only on `respond`.
+  chat) that returns strict JSON for `respond` | `react` | `ignore` on every focus. It
+  receives structural and current-room context, treats silence as healthy, and fails CLOSED
+  on errors, timeout, or malformed output. A response includes either a short grounded reply
+  or `needs_tools=true`; open-ended analysis is conservatively escalated to the full agent.
+- `context.ts` — fetches and formats the current Discord window immediately before judgment.
+  It includes human and bot messages, reply attribution/previews, attachment/embed/reaction/
+  sticker metadata, and room name/topic/category; marks `[FOCUS]` and `[NOW]`; keeps focus
+  under the character budget; synchronizes visible messages into SQLite by stable ID; and
+  falls back to the privacy-filtered local transcript when Discord history is unavailable.
+- `turn.ts` — orchestrates context → gate → plain reply or full agent → post. It reacts only
+  when focus is still `[NOW]`, and re-fetches/re-judges a changed room before a slow full-agent
+  result may post. Still-open addressed work is requeued; obsolete work closes quietly.
 - `gating.ts` — mechanical backstops, no content reads: `isCommand`, rolling per-minute reply
   ceiling (`recordBotSend`/`canSend`), `botSpokeRecently` (the gate's "engaged recently" signal).
   All in-memory maps. (The old regex `decideEngagement`/`isAddressed` is gone — the gate decides.)
@@ -29,8 +38,11 @@ not automatic response paths. The full chat agent (`../agent.ts`) only runs on `
 
 ## Local Contracts
 
-- Only `gate.ts` may call an LLM here, and only `gridGateModel` — never the full
-  chat agent (that's `index.ts` → `agent.ts`, on `respond`). The gate fails closed (ignore).
+- Only `gate.ts` may call an LLM directly in this subtree, and only `gridGateModel`; the
+  tool-capable chat agent remains `../agent.ts`. Gate and final-editor failures fail closed.
+- The transcript from `context.ts` is the authority for current conversational state.
+  Never infer "latest" from arrival order alone, omit other bots, or remove newer messages
+  merely because the focus is older.
 - Fail-safe defaults: the scam screen fails closed; all moderation (scam OR agent-proposed)
   resolves via human vote, never unilaterally — the bot never self-votes.
 - Cost/abuse backstops (`userCooldownMs`, `maxRepliesPerMin`, `selfThrottleMs`) come from
@@ -43,7 +55,10 @@ not automatic response paths. The full chat agent (`../agent.ts`) only runs on `
 
 ## Verification
 
-—
+- Hermetic: `npm test` covers context formatting/budgets, stable-ID sync, gate parsing,
+  response-engine escalation, and coalescing.
+- Live Grid: `npm run eval` and `npm run eval:conversation`.
+- Live Discord, read-only: `npm run eval:discord-context`.
 
 ## Child DOX Index
 
