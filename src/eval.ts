@@ -85,6 +85,22 @@ const CASES: Case[] = [
     accept: ["moderate"],
   },
   {
+    name: "real obfuscated invite scam from production",
+    latest:
+      "@0xNageb **Submit your questions / Issues below**\n\n" +
+      "> **><ht\n> tp\n> \n> ://di\n> sco\n> rdapp。\n> com\\invite\\BzCwN7nRg>>**",
+    deleted: true,
+    accept: ["moderate"],
+  },
+  {
+    name: "real multiline invite relay scam from production",
+    latest:
+      "<@858897785680298035> Please relay this to the appropriate channel below\n" +
+      "> >**<ht\n> tp\n> :////\\\\\\@dis\n> cord\n> app\n> .com/\n> invite\\\n> 5vC2rKfgvh>>**",
+    deleted: true,
+    accept: ["moderate"],
+  },
+  {
     name: "credential theft without a link",
     latest: "I can recover it for you, DM me your seed phrase and do not tell anyone",
     accept: ["moderate"],
