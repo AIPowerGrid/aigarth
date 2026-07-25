@@ -91,7 +91,11 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
   `!forget`. Credential-shaped values are redacted before persistence.
 - **Moderation is community-decided, never the AI alone.** The AI may only *propose*
   bans/deletes via `start_ban_poll` / `start_delete_poll`; they enact only on
-  `BAN_VOTE_THRESHOLD` human ✅ votes. The bot never self-votes.
+  `BAN_VOTE_THRESHOLD` human ✅ votes. The deterministic screen also proposes an explicit
+  ban for unofficial Discord invites and support impersonation pointing off AIPG-owned
+  destinations. Evidence is captured before a flash deletion, duplicate active polls are
+  suppressed, and the bot never self-votes. The production Discord role must have
+  `Ban Members` and sit above target roles; startup warns if enforcement is unavailable.
 
 ## Work Guidance
 

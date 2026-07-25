@@ -1,4 +1,11 @@
-import { Client, GatewayIntentBits, Events, Partials, type Message } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  Events,
+  Partials,
+  PermissionFlagsBits,
+  type Message,
+} from "discord.js";
 import { config } from "./config.js";
 import { log } from "./util/log.js";
 import { messages, banVotes, reminders } from "./store/db.js";
@@ -43,6 +50,14 @@ client.once(Events.ClientReady, (c) => {
     gateModel: config.gridGateModel,
     prompts: PROMPT_VERSION,
   });
+  for (const guild of c.guilds.cache.values()) {
+    const me = guild.members.me;
+    if (!me?.permissions.has(PermissionFlagsBits.BanMembers)) {
+      log.warn("moderation enforcement unavailable; grant Aigarth Ban Members", {
+        guildId: guild.id,
+      });
+    }
+  }
   // Periodic housekeeping: prune old history + expire stale votes.
   setInterval(() => {
     const removed = messages.cleanup(30);
@@ -105,7 +120,13 @@ client.on(Events.MessageCreate, async (message) => {
 
     // Deterministic scam screen (guild messages only). Fail-closed → community vote.
     if (message.guild && inTracked) {
-      const verdict = screenMessage(message.content);
+      const verdict = screenMessage(message.content, {
+        authorName: message.member?.displayName ?? message.author.displayName ?? message.author.username,
+        guildId: message.guild.id,
+        trustedAuthor:
+          config.adminUserIds.includes(message.author.id) ||
+          !!message.member?.permissions.has(PermissionFlagsBits.ManageMessages),
+      });
       if (verdict.flagged) {
         await openBanVote(message, verdict.reason);
         return;
@@ -178,6 +199,16 @@ async function onReaction(reaction: any, user: any, add: boolean) {
 }
 client.on(Events.MessageReactionAdd, (r, u) => onReaction(r, u, true));
 client.on(Events.MessageReactionRemove, (r, u) => onReaction(r, u, false));
+client.on(Events.MessageDelete, (message) => {
+  const vote = banVotes.activeForSourceMessage(message.id);
+  if (vote) {
+    log.warn("flagged scam source deleted; ban poll and captured evidence remain active", {
+      sourceMessageId: message.id,
+      voteMessageId: vote.message_id,
+      target: vote.target_id,
+    });
+  }
+});
 
 client.on("error", (e) => log.error("client error", { err: String(e) }));
 client.on("warn", (m) => log.warn("client warn", { msg: String(m) }));

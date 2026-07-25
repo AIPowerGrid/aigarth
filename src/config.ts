@@ -13,6 +13,11 @@ function list(name: string): string[] {
     .filter(Boolean);
 }
 
+function listOr(name: string, fallback: string[]): string[] {
+  const values = list(name);
+  return values.length ? values : fallback;
+}
+
 function num(name: string, def: number): number {
   const v = process.env[name];
   return v ? Number(v) : def;
@@ -32,6 +37,9 @@ export const config = {
   /** Channels it stores history from but never responds in. */
   readonlyChannels: list("BOT_READONLY_CHANNELS"),
   adminUserIds: list("ADMIN_USER_IDS"),
+  /** Exact invite codes published by AIPG. Other Discord invites are treated
+   * as high-confidence impersonation/raid signals. */
+  officialDiscordInviteCodes: listOr("OFFICIAL_DISCORD_INVITE_CODES", ["W9D8j6HCtC"]),
 
   // Grid — the agent's brain runs on our OWN grid (dogfooding).
   gridApiKey: req("GRID_API_KEY"),

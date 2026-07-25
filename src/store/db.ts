@@ -424,6 +424,16 @@ const insVote = db.prepare(`
   VALUES (?,?,?,?,?,?,?,?)
 `);
 const getVote = db.prepare("SELECT * FROM ban_votes WHERE message_id = ? AND resolved = 0");
+const getActiveTargetVote = db.prepare(
+  `SELECT * FROM ban_votes
+   WHERE guild_id = ? AND target_id = ? AND action = ? AND resolved = 0
+   ORDER BY created_ts DESC LIMIT 1`,
+);
+const getTargetMessageVote = db.prepare(
+  `SELECT * FROM ban_votes
+   WHERE target_msg_id = ? AND resolved = 0
+   ORDER BY created_ts DESC LIMIT 1`,
+);
 const setVoteSets = db.prepare("UPDATE ban_votes SET up_json = ?, down_json = ? WHERE message_id = ?");
 const resolveVote = db.prepare("UPDATE ban_votes SET resolved = 1 WHERE message_id = ?");
 const expireVotes = db.prepare("UPDATE ban_votes SET resolved = 1 WHERE resolved = 0 AND created_ts < ?");
@@ -442,6 +452,11 @@ export interface BanVote {
   down: string[];
 }
 
+function asBanVote(row: any): BanVote | null {
+  if (!row) return null;
+  return { ...row, up: JSON.parse(row.up_json), down: JSON.parse(row.down_json) };
+}
+
 export const banVotes = {
   create(
     messageId: string,
@@ -455,9 +470,13 @@ export const banVotes = {
     insVote.run(messageId, channelId, guildId, targetId, clamp(reason), action, targetMsgId, Date.now());
   },
   get(messageId: string): BanVote | null {
-    const r = getVote.get(messageId) as any;
-    if (!r) return null;
-    return { ...r, up: JSON.parse(r.up_json), down: JSON.parse(r.down_json) };
+    return asBanVote(getVote.get(messageId));
+  },
+  activeForTarget(guildId: string, targetId: string, action: VoteAction): BanVote | null {
+    return asBanVote(getActiveTargetVote.get(guildId, targetId, action));
+  },
+  activeForSourceMessage(messageId: string): BanVote | null {
+    return asBanVote(getTargetMessageVote.get(messageId));
   },
   setVotes(messageId: string, up: string[], down: string[]) {
     setVoteSets.run(JSON.stringify(up), JSON.stringify(down), messageId);

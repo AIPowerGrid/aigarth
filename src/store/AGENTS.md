@@ -26,6 +26,8 @@ local per-user facts. Replaces the legacy `conversation_db.py`.
 - `!memory off` disables and clears personal facts. It does not delete retained channel
   messages or shared channel summaries; those follow channel retention.
 - Moderation votes are persisted and survive restarts; resolved/expired via flags, not deletion.
+  Active votes are queryable by target and source message so duplicate scam polls are suppressed
+  and deletion of a flagged source can be observed without losing the vote.
 - This is the only module that opens the sqlite DB; everything else uses these APIs.
 
 ## Work Guidance
