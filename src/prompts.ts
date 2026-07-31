@@ -5,4 +5,4 @@
  * eval score. Behavior lives in prompts — treat prompt edits like code changes:
  * bump the version and re-run `npm run eval`.
  */
-export const PROMPT_VERSION = "2026-07-25.3";
+export const PROMPT_VERSION = "2026-07-31.2";

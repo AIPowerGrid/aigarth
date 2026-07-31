@@ -48,6 +48,11 @@ moderation engine, and `!` commands. Every eligible focus is judged;
 - The transcript from `context.ts` is the authority for current conversational state.
   Never infer "latest" from arrival order alone, omit other bots, or remove newer messages
   merely because the focus is older.
+- Every gate verdict classifies the focus audience as `bot`, `room`, `human`, or `unclear`.
+  For an unaddressed focus, `respond` is mechanically allowed only for `bot` or `room`;
+  human-directed and unclear follow-ups fail closed to silence. A short imperative such as
+  "try again" is not an invitation to Aigarth when the transcript shows it continues another
+  person's report. Direct addressing remains evidence for the AI, never a forced response.
 - Fail-safe defaults: malformed/failed model judgment means no poll; all moderation resolves
   via human vote, never unilaterally, and the bot never self-votes.
 - Cost/abuse backstops (`userCooldownMs`, `maxRepliesPerMin`, `selfThrottleMs`) come from

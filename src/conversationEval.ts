@@ -156,6 +156,16 @@ const scenarios: Scenario[] = [
     expected: "ignore",
   },
   {
+    name: "human-directed retry after product issue reports",
+    transcript:
+      "[2026-07-31 20:45Z] d@yvid: AIPG.chat says the response was terminated before completion\n" +
+      "[2026-07-31 20:46Z] d@yvid: wallet login asks me to install MetaMask\n" +
+      "[2026-07-31 20:47Z] d@yvid: text-to-video still is not working\n" +
+      "[FOCUS][NOW][2026-07-31 20:48Z] half: Try again plz, I think all fixed",
+    focus: "Try again plz, I think all fixed",
+    expected: "ignore",
+  },
+  {
     name: "question aimed at another participant",
     transcript:
       "[2026-07-25 12:00Z] alice: Bob set up the validator host\n" +

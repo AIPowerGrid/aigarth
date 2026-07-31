@@ -56,6 +56,16 @@ const CASES: Case[] = [
     accept: ["ignore"],
   },
   {
+    name: "human-directed retry after product issue reports",
+    history:
+      "[2026-07-31 20:45Z] d@yvid: AIPG.chat says the response was terminated before completion\n" +
+      "[2026-07-31 20:46Z] d@yvid: wallet login asks me to install MetaMask\n" +
+      "[2026-07-31 20:47Z] d@yvid: text-to-video still is not working\n" +
+      "[FOCUS][NOW][2026-07-31 20:48Z] half: Try again plz, I think all fixed",
+    latest: "Try again plz, I think all fixed",
+    accept: ["ignore"],
+  },
+  {
     name: "private human back-and-forth",
     history: "alice: dinner at seven?\nbob: works for me",
     latest: "I'll book the table",

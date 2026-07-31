@@ -103,7 +103,7 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
     }
     const useFullAgent = shouldUseFullAgent(decision, act.content);
     log.info("gate", {
-      ch: channelId, action: decision.action, emoji: decision.emoji,
+      ch: channelId, action: decision.action, audience: decision.audience, emoji: decision.emoji,
       reason: decision.reason, error: decision.error, context: room.source,
       mode: decision.action === "respond" ? (useFullAgent ? "agent" : "plain") : undefined,
       focusIsLatest: room.focusIsLatest, newer: room.messagesAfterFocus,
@@ -373,6 +373,7 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       log.info("stale turn revalidated", {
         ch: channelId,
         action: reconsidered.action,
+        audience: reconsidered.audience,
         reason: reconsidered.reason,
         newer: refreshed.messagesAfterFocus,
       });
