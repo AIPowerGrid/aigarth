@@ -2,7 +2,7 @@ import { ActivityType, type Client, type MessageMentionOptions } from "discord.j
 import { config } from "../config.js";
 import { log } from "../util/log.js";
 import { channelSummaries, messages, settings, reminders } from "../store/db.js";
-import { canSend, recordBotSend, botSpokeRecently } from "./gating.js";
+import { recordBotSend, botSpokeRecently } from "./transport.js";
 import { openModerationVote } from "./scam.js";
 import { runTurn } from "../agent.js";
 import type { DiscordActions } from "../skills/discordActions.js";
@@ -54,7 +54,6 @@ export async function processActivity(client: Client, act: Activity): Promise<vo
       (message.channel as any).lastMessageId !== room.latestMessageId;
     const requireCurrentRoom = (): void => {
       if (!act.respondable) throw new Error("Conversation output unavailable in this channel");
-      if (!canSend(channelId)) throw new Error("Discord output rate limit reached");
       if (roomHasChanged()) throw new Error("Discord room changed while composing");
     };
     const history = room.transcript;

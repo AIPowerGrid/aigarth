@@ -9,7 +9,8 @@
   Local history is an explicitly degraded fallback, not verified live context.
 - `turn.ts`: run the single agent and supply scoped Discord actions. Only completed
   explicit replies publish. Refresh context inside the same turn before finish.
-- `gating.ts`: command recognition and mechanical output limits only. No model calls.
+- `transport.ts`: command recognition and recent-send context. No model calls or
+  homegrown reply ceiling. Discord.js respects Discord's actual API rate limits.
 - `scam.ts`: evidence snapshots, persisted human votes, role/permission checks,
   deduplication and enforcement. The bot never votes for itself.
 - `commands.ts`: explicit privacy/admin commands. Unknown prefixes reach the agent.
@@ -18,7 +19,7 @@
 
 - No separate participation judge or reply editor. All ordinary human messages,
   including mentions and messages to other people, are decisions for Qwen.
-- Check output permissions/rate limits at publication, not before inference.
+- Check output permissions at publication; let Discord.js handle platform rate limits.
 - Finish-time refresh lets Qwen reconsider a changed room. Do not insert a second
   judge. A subsequent race prevents stale delivery; the new event gets its own turn.
 - Tool history is bound to the current channel, bounded and credential-redacted.

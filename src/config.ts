@@ -116,8 +116,6 @@ export const config = {
   turnTimeoutMs: num("TURN_TIMEOUT_MS", 120000),
   // How many durable facts to keep per user (local per-user memory).
   userMemoryMax: num("USER_MEMORY_MAX", 30),
-  // Hard backstop: max bot messages per channel per rolling minute (all kinds).
-  maxRepliesPerMin: num("MAX_REPLIES_PER_MIN", 4),
   // Community moderation votes proposed by AI tools. Human votes only; the bot
   // never self-votes. 4 ✅ enact, 3 ❌ dismiss.
   banVoteThreshold: num("BAN_VOTE_THRESHOLD", 4),

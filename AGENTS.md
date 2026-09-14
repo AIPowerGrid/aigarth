@@ -103,6 +103,7 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
   `buildTools` (`src/agent.ts`); do not stuff capabilities into the system prompt.
 - Errors fail safe: a bad turn produces silence (no apology spam); SSRF checks and
   publication validation remain mandatory. Tool arguments are not logged.
+  Discord.js handles platform rate limits; do not add an arbitrary reply-frequency veto.
 - Requires Node 22.19+ (`package.json` engines), matching the pi agent-core
   packages. `better-sqlite3` also needs a compatible prebuilt binary or native
   build toolchain for the selected Node release.

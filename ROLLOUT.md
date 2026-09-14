@@ -5,7 +5,8 @@
 - One `qwen3-27b` agent selects participation and tools. No engagement judge,
   reply editor, regex audience classifier, user cooldown or snooze filter.
 - Every eligible human event reaches a per-channel FIFO. Commands, deduplication,
-  permissions and output rate limits remain mechanical.
+  permissions and Discord platform rate limits remain mechanical. The old
+  four-replies-per-minute ceiling is removed, including the delivery-time check.
 - Explicit `finish_turn`: silent or exact public text. Intermediate drafts never
   publish. Failure/truncation suppresses text and generated attachments.
 - Current room metadata, reply attribution, prior bot messages, summaries and a

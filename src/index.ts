@@ -9,7 +9,7 @@ import {
 import { config } from "./config.js";
 import { log } from "./util/log.js";
 import { messages, banVotes, reminders } from "./store/db.js";
-import { isCommand } from "./discord/gating.js";
+import { isCommand } from "./discord/transport.js";
 import { handleCommand } from "./discord/commands.js";
 import { handleVoteReaction } from "./discord/scam.js";
 import { createCoalescer, type Activity, type Coalescer } from "./discord/coalescer.js";
