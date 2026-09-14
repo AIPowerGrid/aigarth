@@ -28,7 +28,11 @@
 - Preserve immutable flash-deletion evidence; deletion alone is not proof of abuse.
 - Moderator buttons are bound to persisted guild/channel/card IDs and checked
   against freshly fetched permissions and role hierarchy. No model tool can approve.
-  Reactions count only eligible moderators; revalidate the quorum before acting.
+  Reactions require the configured existing Members role; revalidate the
+  full quorum and protected-target status before acting. Voting roles do not grant
+  moderator buttons. Voters must be human members with channel history visibility.
+  Staff permissions, guild owner, bots, configured admin users and protected role IDs
+  cannot be targeted by reaction quorum. Moderator buttons remain separate.
   Failed Discord calls leave cases open. Only Unknown Message means already deleted.
 - One active case per target in a guild accumulates redacted source evidence.
   Manual/external bans and startup reconciliation close cases; source deletion

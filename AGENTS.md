@@ -89,9 +89,10 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
   `!forget`. Credential-shaped values are redacted before persistence.
 - **Moderation requires authorized humans, never the AI alone.** The AI may only *propose*
   bans/deletes via `start_ban_poll` / `start_delete_poll`. Moderator buttons allow
-  direct approval; reaction quorum counts only freshly verified eligible moderators.
-  Ban/dismiss-ban require Ban Members and appropriate role hierarchy; deleting
-  requires Manage Messages. The same agent judges intent and room
+  direct approval; reaction quorum counts freshly verified humans with the existing
+  Members role. Community votes cannot target staff, bots, owners, configured admins
+  or protected roles. Direct ban buttons require Ban Members and role hierarchy;
+  direct deletion requires Manage Messages. The same agent judges intent and room
   context without keyword/domain rules, then opens a poll or does nothing. Evidence is
   captured before a flash deletion, duplicate active polls are suppressed, and the bot
   never self-votes. The production Discord role must have

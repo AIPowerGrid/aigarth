@@ -121,6 +121,8 @@ export const config = {
   banVoteThreshold: num("BAN_VOTE_THRESHOLD", 4),
   dismissVoteThreshold: num("DISMISS_VOTE_THRESHOLD", 3),
   banVoteTtlMs: num("BAN_VOTE_TTL_MS", 86_400_000),
+  communityVoterRoleIds: list("COMMUNITY_VOTER_ROLE_IDS"),
+  protectedModerationRoleIds: list("PROTECTED_MODERATION_ROLE_IDS"),
   // Backward-compatible outcome for legacy persisted action="moderate" votes.
   scamOutcome: (process.env.SCAM_OUTCOME ?? "timeout") as "timeout" | "ban",
 };

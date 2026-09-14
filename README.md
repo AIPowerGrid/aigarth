@@ -54,7 +54,19 @@ Permissions, human voting, deduplication and output rate limits remain mechanica
 Qwen proposes a case; moderators use **Ban**, **Delete message**, or **Dismiss**.
 Buttons verify current Discord permissions, source card and role hierarchy on the
 server. Ban/dismiss-ban needs Ban Members; delete needs Manage Messages. Reaction
-quorum remains available to eligible moderators, not arbitrary human accounts.
+quorum is available to human users with the server's existing **Members** role.
+Default: four distinct approvals act; three dismissals close. Each voter has one
+position; role membership and target protections are rechecked before enforcement.
+
+Set the existing Members role ID in `COMMUNITY_VOTER_ROLE_IDS`. No new role,
+voter enrollment or native Discord moderation permissions are needed.
+Set additional staff/protected role IDs in `PROTECTED_MODERATION_ROLE_IDS`.
+Owners, bots, configured admins and members with moderation/administration
+permissions are automatically protected from community votes. Role IDs are used,
+not names, account age or keyword rules. Empty voter-role configuration keeps
+community voting disabled while moderator actions continue working.
+This deliberately trusts Members-role holders: multiple accounts with that role
+can collude. Distinct Discord user IDs are not proof of distinct people.
 
 Manual bans close matching cases automatically. Deleting a source message preserves
 a ban proposal and its redacted evidence. Repeated reports attach to one active case

@@ -78,6 +78,21 @@ async function canDeleteIn(client: Client, channelId: string, actor: any): Promi
   return !!channel?.permissionsFor(actor)?.has(PermissionFlagsBits.ManageMessages);
 }
 
+async function eligibleVoter(client: Client, guild: any, vote: BanVote, actor: any): Promise<boolean> {
+  if (!actor || actor.user.bot || actor.id === vote.target_id) return false;
+  if (!config.communityVoterRoleIds.some(id => actor.roles.cache.has(id))) return false;
+  const channel: any = await client.channels.fetch(vote.channel_id);
+  if (!channel?.permissionsFor(actor)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory])) return false;
+  if (vote.target_id === guild.ownerId || config.adminUserIds.includes(vote.target_id)) return false;
+  const target = await memberFor(guild, vote.target_id);
+  if (!target) return true; // Leaving after a scam must not evade a vote.
+  const staffPermissions = [PermissionFlagsBits.Administrator, PermissionFlagsBits.BanMembers,
+    PermissionFlagsBits.KickMembers, PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles,
+    PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ModerateMembers];
+  return !target.user.bot && !staffPermissions.some(p => target.permissions.has(p)) &&
+    !config.protectedModerationRoleIds.some(id => target.roles.cache.has(id));
+}
+
 function permitted(member: any, action: string): boolean {
   if (!member || member.user?.bot) return false;
   return member.permissions.has(action === "delete"
@@ -94,8 +109,14 @@ async function updateCard(client: Client, vote: BanVote, status?: string) {
     const ch: any = await client.channels.fetch(vote.channel_id);
     const card = await ch.messages.fetch(vote.message_id);
     const embed = card.embeds[0] ? EmbedBuilder.from(card.embeds[0]) : new EmbedBuilder();
+    // Refresh instructions on older cards without discarding their captured evidence.
+    const description = (embed.data.description ?? "").split("\n")
+      .filter(line => !line.startsWith("Moderator buttons below.") && !line.startsWith("React ✅ to ") &&
+        !line.startsWith("Community voting:"))
+      .join("\n");
+    embed.setDescription(`${description}\nCommunity voting: ✅ approves the proposed action; ❌ dismisses. ${config.banVoteThreshold} approvals or ${config.dismissVoteThreshold} dismissals decide. Human users with the Members role who can see this case may vote. Staff and protected members cannot be targeted. Buttons are moderator-only.`.slice(0, 4096));
     const evidence = banVotes.evidence(vote.message_id);
-    embed.setFooter({ text: status ?? `${evidence.length} observed message(s); ${evidence.filter(e => e.deleted_ts).length} deleted; ${evidence.filter(e => e.edited_ts).length} edited. Moderator approval required.` });
+    embed.setFooter({ text: status ?? `${evidence.length} observed message(s); ${evidence.filter(e => e.deleted_ts).length} deleted; ${evidence.filter(e => e.edited_ts).length} edited. Moderator approval or community quorum required.` });
     if (status) embed.setTitle(`Moderation: ${status}`).setColor(0x666666);
     await card.edit({ embeds: [embed], components: status ? [] : buttons(vote.message_id), allowedMentions: SAFE_MENTIONS });
   } catch (error) { log.warn("moderation card update failed", { caseId: vote.message_id, err: String(error) }); }
@@ -143,7 +164,7 @@ export async function reconcileCases(client: Client) {
 
 /**
  * Open a persisted community vote and seed its ✅/❌ reactions. The bot never
- * self-votes. Authorized moderators can act directly; eligible moderator reactions
+ * self-votes. Authorized moderators can act directly; human community reactions
  * retain quorum behavior. The model only proposes through its existing tools.
  */
 export async function openModerationVote(v: ModerationVote): Promise<VoteOpenResult> {
@@ -192,7 +213,7 @@ export async function openModerationVote(v: ModerationVote): Promise<VoteOpenRes
       !canEnforceBan
         ? "\n**Enforcement warning:** Aigarth's role still needs the Discord `Ban Members` permission."
         : "",
-      `\nModerator buttons below. Eligible moderators may also react ✅ to ${verb}, ❌ to dismiss. ${n} approvals decide; ${config.dismissVoteThreshold} dismissals close.`,
+      `\nModerator buttons below. Human users with the Members role who can see this case may react ✅ to ${verb}, ❌ to dismiss. ${n} approvals decide; ${config.dismissVoteThreshold} dismissals close. Staff and protected members cannot be targeted by community votes.`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -257,19 +278,17 @@ async function applyVoteReaction(
   }
   const guild = await client.guilds.fetch(vote.guild_id);
   const voter = await memberFor(guild, userId);
-  if (!await canActOn(guild, voter, vote.target_id, vote.action)) return;
-  if (vote.action === "delete" && !await canDeleteIn(client, vote.channel_id, voter)) return;
+  if (!await eligibleVoter(client, guild, vote, voter)) return;
 
   const up = new Set(vote.up);
   const down = new Set(vote.down);
   const set = emoji === "✅" ? up : down;
   if (add) { set.add(userId); (emoji === "✅" ? down : up).delete(userId); }
   else set.delete(userId);
-  // Revalidate the full quorum; removed members/permissions cannot authorize a ban.
+  // Revalidate membership, visibility and target protection before enforcement.
   for (const voters of [up, down]) for (const id of voters) {
     const member = await memberFor(guild, id);
-    if (!await canActOn(guild, member, vote.target_id, vote.action) ||
-        (vote.action === "delete" && !await canDeleteIn(client, vote.channel_id, member))) voters.delete(id);
+    if (!await eligibleVoter(client, guild, vote, member)) voters.delete(id);
   }
   if (!banVotes.get(messageId)) return;
   banVotes.setVotes(messageId, [...up], [...down]);

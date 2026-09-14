@@ -64,3 +64,18 @@ private hostnames or infrastructure paths belong in this repository.
 - This is the practical moderation workflow, not autonomous punishment or a new
   private moderation dashboard. Cases stay in their existing channel; locally retained
   evidence is not publicly expanded. Curated feedback evaluation remains future work.
+
+## Members-role community voting follow-up
+
+- The existing Members role permits community reaction votes without granting
+  native Discord moderation permissions or access to one-click moderator controls.
+- Defaults remain four approvals / three dismissals. Full quorum is revalidated;
+  revoked roles, invisible channels, bots and self-votes cannot authorize action.
+- Staff, bots, owner, configured admins and protected roles cannot be targets of
+  reaction quorum. Moderator buttons keep their separate permissions/hierarchy checks.
+- 64 hermetic tests cover the existing cases plus Members-only approvals/dismissals,
+  revoked voting roles, protected targets, bot voters, channel access and delete quorum.
+- The maintainer chose the existing Members role instead of a new Trusted Voter role.
+  No new roles, bot permissions or member assignments were made. Runtime binds the
+  existing role by ID. This accepts collusion risk among Members-role accounts;
+  separate account IDs do not establish independent people.

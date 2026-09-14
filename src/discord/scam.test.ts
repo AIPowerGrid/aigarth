@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { openModerationVote, handleVoteReaction, handleModerationButton, reconcileBan, observeDeletion, observeEdit } from "./scam.js";
 import { banVotes, db } from "../store/db.js";
 import { PermissionFlagsBits } from "discord.js";
+import { config } from "../config.js";
+config.communityVoterRoleIds.push("members-role");
 
 test("model-requested ban vote preserves redacted evidence and deduplicates", async () => {
   const payloads: any[] = [];
@@ -52,8 +54,8 @@ function fixture(action: "ban" | "delete" = "ban") {
   const id = `case-${++sequence}`;
   const replies: string[] = [], edits: any[] = [], bans: string[] = [];
   let allowed = true, alreadyBanned = false, failDelete = false, failBan = false, deleted = 0;
-  const actor: any = { id: "mod", user: { bot: false }, permissions: { has: () => allowed }, roles: { highest: { comparePositionTo: () => 1 } } };
-  const target: any = { id: "target", user: { bot: false }, roles: { highest: {} } };
+  const actor: any = { id: "mod", user: { bot: false }, permissions: { has: () => allowed }, roles: { cache: new Map([["members-role", {}]]), highest: { comparePositionTo: () => 1 } } };
+  const target: any = { id: "target", user: { bot: false }, permissions: { has: () => false }, roles: { cache: new Map(), highest: {} } };
   const guild: any = {
     id, ownerId: "owner",
     members: {
@@ -168,15 +170,16 @@ test("stale case cannot authorize an action", async () => {
   assert.equal(banVotes.get(f.id), null);
 });
 
-test("opposite votes are exclusive and revoked permissions invalidate quorum", async () => {
+test("opposite votes are exclusive and departed members invalidate quorum", async () => {
   const f = fixture();
   await handleVoteReaction(f.client, f.id, "✅", "voter", true);
   await handleVoteReaction(f.client, f.id, "❌", "voter", true);
   assert.deepEqual(banVotes.get(f.id)?.up, []);
   assert.deepEqual(banVotes.get(f.id)?.down, ["voter"]);
   banVotes.setVotes(f.id, ["old1", "old2", "old3"], []);
-  f.guild.members.fetch = async ({ user }: any) => user === "target" ? f.target : {
-    ...f.actor, id: user, permissions: { has: () => !user.startsWith("old") },
+  f.guild.members.fetch = async ({ user }: any) => {
+    if (user.startsWith("old")) throw Object.assign(new Error("Unknown member"), { code: 10007 });
+    return user === "target" ? f.target : { ...f.actor, id: user };
   };
   await handleVoteReaction(f.client, f.id, "✅", "new", true);
   assert.deepEqual(banVotes.get(f.id)?.up, ["new"]);
@@ -199,6 +202,106 @@ test("channel overrides deny delete even with a guild-level permission", async (
   assert.match(f.replies.at(-1)!, /cannot delete/);
 });
 
+function trustedFixture(action: "ban" | "delete" = "ban") {
+  const f = fixture(action);
+  f.actor.permissions.has = () => false;
+  return f;
+}
+
+test("four Members-role users ban without moderator permissions", async () => {
+  const f = trustedFixture();
+  for (let i = 0; i < 3; i++) await handleVoteReaction(f.client, f.id, "✅", `trusted${i}`, true);
+  assert.equal(f.bans.length, 0);
+  await handleVoteReaction(f.client, f.id, "✅", "trusted3", true);
+  assert.deepEqual(f.bans, ["target"]);
+});
+
+test("three ordinary member dismissals close without punishment", async () => {
+  const f = trustedFixture();
+  for (let i = 0; i < 3; i++) await handleVoteReaction(f.client, f.id, "❌", `trusted${i}`, true);
+  assert.equal(banVotes.get(f.id), null);
+  assert.equal(f.bans.length, 0);
+});
+
+test("ordinary voters cannot use direct moderator buttons", async () => {
+  const f = trustedFixture();
+  await f.click("ban"); await f.click("delete"); await f.click("dismiss");
+  assert.ok(banVotes.get(f.id));
+  assert.equal(f.bans.length, 0);
+  assert.equal(f.deleted(), 0);
+});
+
+test("loss of channel visibility invalidates previously cast approvals", async () => {
+  const f = trustedFixture();
+  for (let i = 0; i < 3; i++) await handleVoteReaction(f.client, f.id, "✅", `old${i}`, true);
+  const channel = await f.client.channels.fetch(f.id);
+  channel.permissionsFor = (actor: any) => ({ has: () => !actor.id.startsWith("old") });
+  await handleVoteReaction(f.client, f.id, "✅", "new", true);
+  assert.deepEqual(banVotes.get(f.id)?.up, ["new"]);
+  assert.equal(f.bans.length, 0);
+});
+
+test("community cannot vote against staff, bots, configured protected roles or owner", async () => {
+  for (const protection of ["staff", "bot", "role", "owner"]) {
+    const f = trustedFixture();
+    if (protection === "staff") f.target.permissions.has = (p: bigint) => p === PermissionFlagsBits.ManageMessages;
+    if (protection === "bot") f.target.user.bot = true;
+    if (protection === "role") {
+      config.protectedModerationRoleIds.push(`protected-${f.id}`);
+      f.target.roles.cache.set(`protected-${f.id}`, {});
+    }
+    if (protection === "owner") f.guild.ownerId = "target";
+    for (let i = 0; i < 4; i++) await handleVoteReaction(f.client, f.id, "✅", `trusted${i}`, true);
+    assert.equal(f.bans.length, 0, protection);
+    assert.deepEqual(banVotes.get(f.id)?.up, [], protection);
+  }
+});
+
+test("protected role added before the final vote blocks enforcement", async () => {
+  const f = trustedFixture();
+  for (let i = 0; i < 3; i++) await handleVoteReaction(f.client, f.id, "✅", `trusted${i}`, true);
+  f.target.permissions.has = () => true;
+  await handleVoteReaction(f.client, f.id, "✅", "trusted3", true);
+  assert.equal(f.bans.length, 0);
+});
+
+test("trusted bots and members without channel visibility cannot vote", async () => {
+  const f = trustedFixture(); f.actor.user.bot = true;
+  await handleVoteReaction(f.client, f.id, "✅", "trusted0", true);
+  assert.deepEqual(banVotes.get(f.id)?.up, []);
+  f.actor.user.bot = false;
+  const channel = await f.client.channels.fetch(f.id);
+  channel.permissionsFor = () => ({ has: () => false });
+  await handleVoteReaction(f.client, f.id, "✅", "trusted0", true);
+  assert.deepEqual(banVotes.get(f.id)?.up, []);
+});
+
+test("community can approve deletion without getting Discord delete permissions", async () => {
+  const f = trustedFixture("delete");
+  for (let i = 0; i < 4; i++) await handleVoteReaction(f.client, f.id, "✅", `trusted${i}`, true);
+  assert.equal(f.deleted(), 1);
+  assert.equal(banVotes.get(f.id), null);
+});
+
+test("server membership without the Members role cannot vote", async () => {
+  const f = trustedFixture();
+  f.actor.roles.cache.clear();
+  for (let i = 0; i < 4; i++) await handleVoteReaction(f.client, f.id, "✅", `user${i}`, true);
+  assert.deepEqual(banVotes.get(f.id)?.up, []);
+  assert.equal(f.bans.length, 0);
+});
+
+test("removing Members role invalidates old approvals at quorum time", async () => {
+  const f = trustedFixture();
+  for (let i = 0; i < 3; i++) await handleVoteReaction(f.client, f.id, "✅", `old${i}`, true);
+  f.guild.members.fetch = async ({ user }: any) => user === "target" ? f.target : {
+    ...f.actor, id: user, roles: { ...f.actor.roles, cache: user.startsWith("old") ? new Map() : f.actor.roles.cache },
+  };
+  await handleVoteReaction(f.client, f.id, "✅", "new", true);
+  assert.deepEqual(banVotes.get(f.id)?.up, ["new"]);
+  assert.equal(f.bans.length, 0);
+});
+
 test("passed ban vote remains active after failed enforcement and can be retried", async () => {
   const { banVotes } = await import("../store/db.js");
   const voteId = "retry-vote-1";
@@ -212,7 +315,7 @@ test("passed ban vote remains active after failed enforcement and can be retried
     guilds: {
       fetch: async () => ({
         members: {
-          fetch: async ({ user }: any) => ({ id: user, user: { bot: false }, permissions: { has: () => true }, roles: { highest: { comparePositionTo: () => 1 } } }),
+          fetch: async ({ user }: any) => ({ id: user, user: { bot: false }, permissions: { has: () => user !== targetId }, roles: { cache: new Map([["members-role", {}]]), highest: { comparePositionTo: () => 1 } } }),
           ban: async (id: string) => {
             if (shouldFail) throw new Error("Missing Permissions");
             banned.push(id);
@@ -222,6 +325,8 @@ test("passed ban vote remains active after failed enforcement and can be retried
       }),
     },
   };
+
+  client.channels = { fetch: async () => ({ permissionsFor: () => ({ has: () => true }) }) };
 
   for (let i = 0; i < 4; i++) {
     await handleVoteReaction(client, voteId, "✅", `retry-voter-${i}`, true);
