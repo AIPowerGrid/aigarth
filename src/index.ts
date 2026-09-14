@@ -32,23 +32,22 @@ const client = new Client({
 });
 
 const TRACKED = new Set([...config.channels, ...config.readonlyChannels]);
-const BOT_NAME_RE = new RegExp(`\\b${config.botName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
 
 // One attention per channel: the coalescer schedules a single turn per channel and
-// hands it to processActivity (gate → agent → post). See discord/coalescer.ts.
+// hands every eligible message to the same tool-capable agent, serialized by channel.
 let coalescer: Coalescer;
 coalescer = createCoalescer({
-  run: (act) => processActivity(client, act, coalescer),
+  run: (act) => processActivity(client, act),
   settleMs: config.convSettleMs,
   settleAddressedMs: config.convSettleAddressedMs,
 });
 const recentActivities = new Map<string, Activity>();
+const receivedIds = new Set<string>();
 
 client.once(Events.ClientReady, (c) => {
   log.info("aigarth online", {
     tag: c.user.tag,
     chatModel: config.gridChatModel,
-    gateModel: config.gridGateModel,
     prompts: PROMPT_VERSION,
   });
   for (const guild of c.guilds.cache.values()) {
@@ -90,6 +89,9 @@ client.once(Events.ClientReady, (c) => {
 client.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return;
+    if (receivedIds.has(message.id)) return;
+    receivedIds.add(message.id);
+    setTimeout(() => receivedIds.delete(message.id), 300_000).unref();
     const inTracked = !message.guild || TRACKED.size === 0 || TRACKED.has(message.channelId);
     log.info("msg recv", {
       ch: message.channelId,
@@ -114,10 +116,7 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     // `!` commands bypass the agent entirely.
-    if (isCommand(message.content)) {
-      await handleCommand(message);
-      return;
-    }
+    if (inTracked && isCommand(message.content) && await handleCommand(message)) return;
 
     // Respond only in active (non-readonly) tracked channels + DMs.
     const respondable = !message.guild
@@ -126,7 +125,6 @@ client.on(Events.MessageCreate, async (message) => {
         !config.readonlyChannels.includes(message.channelId);
     if (!inTracked) return;
 
-    const readableContent = renderMentions(client, message);
     const content = renderMentions(client, message, { stripBot: true });
 
     // Moderation/react/reply target: the replied-to message if this is a reply, else
@@ -143,12 +141,13 @@ client.on(Events.MessageCreate, async (message) => {
       !!client.user &&
       ((!!message.reference?.messageId && modTarget !== message && modTarget.author?.id === client.user.id) ||
         message.mentions.repliedUser?.id === client.user.id);
-    const named = BOT_NAME_RE.test(readableContent);
+    // The model reads names in the transcript; no keyword participation signal.
+    const named = false;
     const isDM = !message.guild;
     // Structural context only — even these signals are judged by the AI later.
     const addressed = mentioned || repliedToBot || named || isDM;
-    // A bare "@aigarth" (addressed, no text) is a real ping; unaddressed empty isn't.
-    if (!content && message.attachments.size === 0 && !addressed) return;
+    // Sticker/embed-only human messages also deserve context-aware consideration.
+    if (!content && message.attachments.size === 0 && message.stickers.size === 0 && message.embeds.length === 0 && !addressed) return;
 
     const imageUrls = [...message.attachments.values()]
       .filter((a) => (a.contentType ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(a.name ?? ""))

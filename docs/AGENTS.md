@@ -13,6 +13,8 @@ runtime knowledge source, so stale claims become incorrect bot answers.
 - Operator docs point to the canonical worker repositories and public docs.
 - Historical incident/migration docs must be explicitly labeled historical.
 - `src/docs/store.ts` owns discovery, reads, and admin save/delete behavior.
+- `operating-brief.md` is bounded orientation injected into every agent turn.
+  Include review date and canonical sources; label it historical, not live status.
 
 ## Local Contracts
 
@@ -29,7 +31,7 @@ runtime knowledge source, so stale claims become incorrect bot answers.
 - Never include private validator challenges, secrets, private infrastructure,
   personal data, or unverified accusations.
 - Use canonical repositories: `grid-core`, `grid-text-worker`,
-  `grid-media-worker`, `grid-validator`, and `grid-discord-agent`.
+  `grid-media-worker`, `grid-validator`, and `aigarth`.
 - `AGENTS.md` is not knowledge content and is reserved from Discord doc admin
   read/write/delete operations.
 

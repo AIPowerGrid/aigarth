@@ -2,84 +2,82 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { config } from "../config.js";
 
-/**
- * grid_status — live state of the AI Power Grid (worker counts, queue, which
- * models are online). This is the dogfooding showcase: the agent answers
- * "how's the grid?" with real numbers from the network it runs on.
- *
- * Reads the public horde-style status API (no key needed). Short cache so a
- * burst of "how many workers?" questions doesn't hammer the endpoint.
- */
+const views = {
+  overview: "/v1/status/network",
+  models: "/v1/status/models",
+  text_models: "/v1/models",
+  validator_capabilities: "/v1/validator/capabilities",
+} as const;
 
-const cache = new Map<string, { v: any; exp: number }>();
-const TTL = 20_000;
-
-async function get(path: string, signal?: AbortSignal): Promise<any> {
-  const hit = cache.get(path);
-  if (hit && hit.exp > Date.now()) return hit.v;
-  const res = await fetch(`${config.gridStatusUrl.replace(/\/$/, "")}${path}`, {
-    headers: { "Client-Agent": "aigarth-agent:0.1" },
-    signal,
-  });
-  if (!res.ok) throw new Error(`grid status ${res.status}`);
-  const v = await res.json();
-  cache.set(path, { v, exp: Date.now() + TTL });
-  return v;
+/** Only fixed public endpoints, no credentials, no redirects or inferred zeros. */
+export async function publicSnapshot(url: string, signal?: AbortSignal): Promise<any> {
+  const fetched_at = new Date().toISOString();
+  try {
+    const res = await fetch(url, { redirect: "error", headers: { Accept: "application/json" },
+      signal: AbortSignal.any([AbortSignal.timeout(12000), ...(signal ? [signal] : [])]) });
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("empty response");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > 256000) throw new Error("response too large");
+        chunks.push(value);
+      }
+    } finally { await reader.cancel(); }
+    if (!res.ok) return { source: url, fetched_at, available: false, http_status: res.status,
+      note: "Lookup failed; do not infer bad user credentials, zero workers or an outage." };
+    return { source: url, fetched_at, available: true, untrusted_data: JSON.parse(Buffer.concat(chunks).toString()) };
+  } catch {
+    return { source: url, fetched_at, available: false, note: "Lookup unavailable. Current state is unknown." };
+  }
 }
-
-function modelSummary(models: any[]): Array<{ name: string; workers: number; queued: number; eta: number }> {
-  return (models ?? [])
-    .map((m) => ({ name: m.name, workers: m.count ?? 0, queued: m.queued ?? 0, eta: m.eta ?? 0 }))
-    .filter((m) => m.workers > 0)
-    .sort((a, b) => b.workers - a.workers);
-}
+const result = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }], details: {} });
+const base = () => config.gridStatusUrl.replace(/\/$/, "");
 
 export function makeGridStatusTool(): AgentTool {
   return {
-    name: "grid_status",
-    label: "Grid Status",
-    description:
-      "Get live AI Power Grid status — worker counts, queue depth, and which " +
-      "text/image models are online (with how many workers serve each). Use for " +
-      "'how's the grid?', 'how many workers?', 'what models are available?'.",
-    parameters: Type.Object({
-      view: Type.Optional(
-        Type.String({
-          description:
-            "What to report: 'overview' (default), 'text_models', or 'image_models'.",
-        }),
-      ),
-    }),
-    execute: async (_id, params: any, signal) => {
-      const view = (params.view ?? "overview").toLowerCase();
-
-      if (view === "text_models" || view === "image_models") {
-        const type = view === "text_models" ? "text" : "image";
-        const models = modelSummary(await get(`/api/v2/status/models?type=${type}`, signal));
-        return {
-          content: [{ type: "text", text: JSON.stringify({ type, models }) }],
-          details: { type, count: models.length },
-        };
+    name: "grid_status", label: "Grid status",
+    description: "Read live public Grid state with source and timestamp. Use validator_capabilities for enabled methods, text_models for served IDs, models for inventory, overview for totals. A capability snapshot does NOT inspect the user's request, authentication or config: a disabled lane is only a likely explanation of their error, never proof their key is fine or that enabling it will fix everything. Missing data means unknown, not zero. This lookup needs no auth; user assignments still do.",
+    parameters: Type.Object({ view: Type.Optional(Type.Union(Object.keys(views).map(v => Type.Literal(v)))) }),
+    execute: async (_id, p: any, signal) => {
+      const path = views[(p.view ?? "overview") as keyof typeof views];
+      if (!path) throw new Error("Unknown status view");
+      return result(await publicSnapshot(base() + path, signal));
+    },
+  };
+}
+export function makeValidatorStatusTool(): AgentTool {
+  return {
+    name: "validator_status", label: "Public validator health",
+    description: "Read public registration, heartbeat and evidence health for one val_ ID. Not access to private keys/accounts and not proof of operator independence. A lane error alone does not mean the whole validator is offline.",
+    parameters: Type.Object({ validator_id: Type.String({ pattern: "^val_[a-f0-9]{32}$" }) }),
+    execute: async (_id, p: any, signal) => {
+      if (!/^val_[a-f0-9]{32}$/.test(p.validator_id)) throw new Error("Invalid public validator ID");
+      return result(await publicSnapshot(base() + "/v1/validator/public/" + p.validator_id, signal));
+    },
+  };
+}
+const repositories = ["grid-validator", "grid-text-worker", "grid-media-worker"] as const;
+export function makeReleaseInfoTool(): AgentTool {
+  return {
+    name: "release_info", label: "Official releases",
+    description: "Read recent published AIPowerGrid releases, including previews. Reports prerelease flags, dates and source links; this is not proof a feature is enabled on Core. Never invent an upgrade/rollback fix from the version alone.",
+    parameters: Type.Object({ repository: Type.Union(repositories.map(r => Type.Literal(r))) }),
+    execute: async (_id, p: any, signal) => {
+      if (!repositories.includes(p.repository)) throw new Error("Unsupported repository");
+      const snapshot = await publicSnapshot(`https://api.github.com/repos/AIPowerGrid/${p.repository}/releases?per_page=5`, signal);
+      if (snapshot.available) {
+        if (!Array.isArray(snapshot.untrusted_data)) return result({ ...snapshot, available: false, untrusted_data: undefined });
+        snapshot.untrusted_data = snapshot.untrusted_data.filter((r: any) => !r.draft).map((r: any) => ({
+          version: r.tag_name, prerelease: r.prerelease, published_at: r.published_at, url: r.html_url,
+          notes: typeof r.body === "string" ? r.body.slice(0, 3500) : "",
+        }));
       }
-
-      // overview: performance + a compact model roll-up
-      const [perf, textModels, imageModels] = await Promise.all([
-        get(`/api/v2/status/performance`, signal),
-        get(`/api/v2/status/models?type=text`, signal),
-        get(`/api/v2/status/models?type=image`, signal),
-      ]);
-      const overview = {
-        text_workers: perf.text_worker_count ?? 0,
-        image_workers: perf.worker_count ?? 0,
-        queued_text_requests: perf.queued_text_requests ?? 0,
-        queued_image_requests: perf.queued_requests ?? 0,
-        text_models: modelSummary(textModels).slice(0, 12),
-        image_models: modelSummary(imageModels).slice(0, 12),
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(overview) }],
-        details: { text_workers: overview.text_workers, image_workers: overview.image_workers },
-      };
+      return result(snapshot);
     },
   };
 }

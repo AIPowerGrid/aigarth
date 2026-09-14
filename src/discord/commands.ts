@@ -25,17 +25,7 @@ export async function handleCommand(message: Message): Promise<boolean> {
 
     case "chattiness": {
       if (!admin) return true;
-      if (!arg) {
-        await message.reply(`🗣️ chattiness is **${settings.getChattiness()}/10**`);
-        return true;
-      }
-      const n = parseInt(arg, 10);
-      if (!Number.isFinite(n) || n < 1 || n > 10) {
-        await message.reply("usage: `!chattiness <1-10>`");
-        return true;
-      }
-      settings.set("chattiness_level", String(n));
-      await message.reply(`✅ chattiness set to **${n}/10**`);
+      await message.reply("The numeric chattiness gate is retired. I decide whether to reply from the conversation context now.");
       return true;
     }
 
@@ -111,7 +101,7 @@ export async function handleCommand(message: Message): Promise<boolean> {
     }
 
     default:
-      return true; // it started with ! — swallow unknown commands silently
+      return false; // Unknown text belongs to the agent, not a prefix filter.
   }
 }
 

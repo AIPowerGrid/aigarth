@@ -39,7 +39,7 @@ export async function maybeExtractUserFacts(opts: {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.gridApiKey}` },
       body: JSON.stringify({
-        model: config.gridGateModel,
+        model: config.gridSummaryModel,
         max_tokens: 512,
         temperature: 0,
         reasoning_effort: "low",

@@ -1,8 +1,8 @@
 /**
- * Prompt version marker. The persona lives in `agent.ts` and the gate prompt in
- * `discord/gate.ts`; bump this whenever you change either, so prompt changes are
+ * Prompt version marker. The single participant persona lives in `agent.ts`;
+ * bump this whenever it changes, so prompt changes are
  * trackable (logged at startup, printed by `npm run eval`) and can be tied to an
  * eval score. Behavior lives in prompts — treat prompt edits like code changes:
  * bump the version and re-run `npm run eval`.
  */
-export const PROMPT_VERSION = "2026-07-31.2";
+export const PROMPT_VERSION = "2026-09-14.qwen-participant.1";

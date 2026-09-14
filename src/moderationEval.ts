@@ -87,7 +87,7 @@ async function runScenario(scenario: Scenario): Promise<{ ok: boolean; detail: s
     roomDescription: "#general; community discussion",
     moderationReview: true,
     actions,
-  });
+  }, { onFailure: reason => console.log("Model failure:", reason.slice(0, 300)) });
   if (result.error) return { ok: false, detail: "agent error" };
   if (result.finalText) return { ok: false, detail: `leaked public text: ${JSON.stringify(result.finalText)}` };
   const actual = actionsTaken[0]?.action ?? "none";

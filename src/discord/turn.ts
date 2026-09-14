@@ -2,35 +2,28 @@ import { ActivityType, type Client, type MessageMentionOptions } from "discord.j
 import { config } from "../config.js";
 import { log } from "../util/log.js";
 import { channelSummaries, messages, settings, reminders } from "../store/db.js";
-import { canSend, recordBotSend, botSpokeRecently, passCooldown } from "./gating.js";
+import { canSend, recordBotSend, botSpokeRecently } from "./gating.js";
 import { openModerationVote } from "./scam.js";
-import { decideEngagement, shouldUseFullAgent } from "./gate.js";
 import { runTurn } from "../agent.js";
 import type { DiscordActions } from "../skills/discordActions.js";
-import type { Activity, Coalescer } from "./coalescer.js";
+import type { Activity } from "./coalescer.js";
 import { stripImageMarkdown, chunk } from "./text.js";
 import { fetchAttachments } from "./render.js";
 import { maybeExtractUserFacts } from "../memoryExtraction.js";
 import { maybeRefreshChannelSummary } from "../conversationSummary.js";
 import { getRoomContext } from "./context.js";
+import { renderMentions } from "./render.js";
+import { redactStoredContent } from "../store/db.js";
 
 // Bot messages never ping: no reply ping, no @everyone/@here/role pings (the model
 // speaks in plain text and addresses people by name, like a person would).
 const SAFE_MENTIONS: MessageMentionOptions = { parse: [], repliedUser: false };
 
-// Tools that are NOT "working toward a reply" — they shouldn't trigger the typing
-// indicator (reply/thread handle their own; the rest are instant or non-message).
-const NO_TYPING = new Set([
-  "react", "reply", "reply_in_thread", "start_ban_poll", "start_delete_poll",
-  "set_channel_status", "remember", "forget", "set_mood", "snooze", "set_chattiness",
-]);
-
 /**
- * Process one coalesced channel turn: the engagement judge for every message, then
- * the per-turn Discord surface + the full chat agent + posting on `respond`.
- * Called by the coalescer (which owns serialization/settle/snooze).
+ * Fresh context -> one participant -> explicitly chosen public output.
+ * The per-channel queue owns serialization, not participation decisions.
  */
-export async function processActivity(client: Client, act: Activity, coalescer: Coalescer): Promise<void> {
+export async function processActivity(client: Client, act: Activity): Promise<void> {
   const channelId = act.message.channelId;
   const message = act.message;
   const modTarget = act.modTarget;
@@ -51,7 +44,7 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
   let typingChannel: any = null;
 
   try {
-    const room = await getRoomContext(client, message, {
+    let room = await getRoomContext(client, message, {
       limit: config.discordContextLimit,
       maxChars: config.historyMaxChars,
       persist: inTracked,
@@ -60,78 +53,15 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       !!room.latestMessageId &&
       (message.channel as any).lastMessageId !== room.latestMessageId;
     const requireCurrentRoom = (): void => {
+      if (!act.respondable) throw new Error("Conversation output unavailable in this channel");
+      if (!canSend(channelId)) throw new Error("Discord output rate limit reached");
       if (roomHasChanged()) throw new Error("Discord room changed while composing");
     };
     const history = room.transcript;
     const channelSummary = channelSummaries.get(channelId)?.summary ?? "";
 
-    const decision = await decideEngagement({
-      history,
-      summary: channelSummary,
-      focus: act.content,
-      focusUserName: message.author.displayName ?? message.author.username,
-      focusIsLatest: room.focusIsLatest,
-      messagesAfterFocus: room.messagesAfterFocus,
-      roomDescription: room.roomDescription,
-      recentlyEngaged: botSpokeRecently(channelId),
-      chattiness: settings.getChattiness(),
-      mentioned: act.mentioned,
-      repliedToBot: act.repliedToBot,
-      named: act.named,
-      isDM: act.isDM,
-      deleted: act.deleted,
-    });
-    const moderationReview = decision.action === "moderate";
-    if (!moderationReview && !act.respondable) {
-      log.info("skip: not respondable", { ch: channelId });
-      return;
-    }
-    // Conversation rate limits must not suppress a model-requested security
-    // review. They apply only to visible participation.
-    if (!moderationReview) {
-      if (!canSend(channelId)) {
-        log.warn("per-channel reply ceiling hit; skipping", { channel: channelId });
-        return;
-      }
-      if (!act.addressed && !passCooldown(message.author.id)) {
-        log.debug("per-user attention cooldown; skipping", {
-          channel: channelId,
-          user: message.author.id,
-        });
-        return;
-      }
-    }
-    const useFullAgent = shouldUseFullAgent(decision, act.content);
-    log.info("gate", {
-      ch: channelId, action: decision.action, audience: decision.audience, emoji: decision.emoji,
-      reason: decision.reason, error: decision.error, context: room.source,
-      mode: decision.action === "respond" ? (useFullAgent ? "agent" : "plain") : undefined,
-      focusIsLatest: room.focusIsLatest, newer: room.messagesAfterFocus,
-      text: act.content.slice(0, 100),
-    });
-    if (decision.action === "react") {
-      // A reaction is attached to one concrete message and cannot be made
-      // current by sending it as a fresh channel post. Enforce the judge's
-      // [FOCUS] == [NOW] rule mechanically.
-      if (!room.focusIsLatest || roomHasChanged()) {
-        log.debug("stale reaction suppressed", { ch: channelId });
-        return;
-      }
-      try {
-        await modTarget.react(decision.emoji || "👍");
-        recordBotSend(channelId);
-      } catch (e) {
-        log.debug("react failed", { err: String(e) });
-      }
-      return;
-    }
-    if (decision.action === "ignore") return;
-
-    // A model-requested safety review always concerns the focus author/message.
-    // A human asking "@aigarth ban this" in a reply targets the replied-to message.
-    const moderationTarget = moderationReview
-      ? focusModerationSnapshot
-      : requestedModerationSnapshot;
+    // Read-only channels restrict permissions, not model participation judgment.
+    const moderationReview = !act.respondable;
 
     const startTyping = (channel: any): void => {
       typingChannel = channel;
@@ -235,7 +165,7 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       reply: postText,
       react: async (emoji: string) => {
         requireCurrentRoom();
-        await modTarget.react(emoji);
+        await message.react(emoji);
         recordBotSend(channelId);
         sentAnything = true;
       },
@@ -246,7 +176,8 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
         void text;
         void threadName;
       },
-      startBanPoll: async (reason: string) => {
+      startBanPoll: async (reason: string, target = "focus") => {
+        const moderationTarget = target === "reply" ? requestedModerationSnapshot : focusModerationSnapshot;
         if (!message.guild) return;
         await openModerationVote({
           channel: message.channel, guildId: message.guild.id, targetUserId: moderationTarget.userId,
@@ -254,7 +185,8 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
         });
         sentAnything = true;
       },
-      startDeletePoll: async (reason: string) => {
+      startDeletePoll: async (reason: string, target = "focus") => {
+        const moderationTarget = target === "reply" ? requestedModerationSnapshot : focusModerationSnapshot;
         if (!message.guild) return;
         await openModerationVote({
           channel: message.channel, guildId: message.guild.id, targetUserId: moderationTarget.userId,
@@ -264,11 +196,7 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       },
       canModerate: !!message.guild,
       inGuild: !!message.guild,
-      snooze: (minutes: number) => {
-        requireCurrentRoom();
-        coalescer.snooze(channelId, minutes * 60_000);
-        log.info("snoozed channel", { ch: channelId, minutes });
-      },
+      snooze: () => { throw new Error("Snooze tool is retired; the model decides silence each turn"); },
       setNickname: async (name: string) => {
         requireCurrentRoom();
         const clean = name.replace(/[@`]/g, "").slice(0, 32).trim();
@@ -304,15 +232,12 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       },
     };
 
-    const result =
-      !useFullAgent && decision.reply
-        ? { finalText: decision.reply, images: [], error: false, delivery: "channel" as const }
-        : await runTurn({
+    const result = await runTurn({
             channelId,
             channelName: ("name" in message.channel ? (message.channel as any).name : undefined) ?? "DM",
             userId: message.author.id,
             userName: message.author.displayName ?? message.author.username,
-            text: act.content || "(they pinged you with no other text)",
+            text: act.content || "(no text; see the focus message's visible metadata)",
             imageUrls: act.imageUrls,
             history,
             channelSummary,
@@ -326,11 +251,24 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
             roomDescription: room.roomDescription,
             spokeRecently: botSpokeRecently(channelId),
             moderationReview,
+            deleted: act.deleted,
             actions,
-            onImage: (u) => pendingImages.push(u),
-            onToolStart: (tool) => {
-              if (!NO_TYPING.has(tool)) startTyping(message.channel);
+            readHistory: async (before, limit = 30) => {
+              const older = await message.channel.messages.fetch({ before, limit: Math.max(1, Math.min(limit, 50)) });
+              const transcript = [...older.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+                .map(m => `[${m.id} ${new Date(m.createdTimestamp).toISOString()}] ${m.author.displayName ?? m.author.username}${m.author.id === client.user?.id ? " (you)" : ""}: ${renderMentions(client, m)}`)
+                .join("\n");
+              return redactStoredContent(transcript).slice(-config.historyMaxChars);
             },
+            refreshContext: async () => {
+              const fresh = await getRoomContext(client, message, {
+                limit: config.discordContextLimit, maxChars: config.historyMaxChars, persist: inTracked,
+              });
+              const changed = fresh.transcript !== room.transcript;
+              room = fresh;
+              return changed ? fresh.transcript : undefined;
+            },
+            onImage: (u) => pendingImages.push(u),
           });
 
     // Moderation review is intentionally silent. Its only visible output is a
@@ -344,44 +282,10 @@ export async function processActivity(client: Client, act: Activity, coalescer: 
       return;
     }
 
-    // A 120B/tool turn can take long enough for the room to change. Never post a
-    // response composed against stale state without letting the judge see the
-    // new lines. An addressed focus that is still relevant is re-queued so the
-    // next turn can compose from the refreshed room; otherwise it closes quietly.
-    if (!postedMessage && roomHasChanged()) {
-      const refreshed = await getRoomContext(client, message, {
-        limit: config.discordContextLimit,
-        maxChars: config.historyMaxChars,
-        persist: inTracked,
-      });
-      const reconsidered = await decideEngagement({
-        history: refreshed.transcript,
-        summary: channelSummary,
-        focus: act.content,
-        focusUserName: message.author.displayName ?? message.author.username,
-        focusIsLatest: refreshed.focusIsLatest,
-        messagesAfterFocus: refreshed.messagesAfterFocus,
-        roomDescription: refreshed.roomDescription,
-        recentlyEngaged: botSpokeRecently(channelId),
-        chattiness: settings.getChattiness(),
-        mentioned: act.mentioned,
-        repliedToBot: act.repliedToBot,
-        named: act.named,
-        isDM: act.isDM,
-        deleted: act.deleted,
-      });
-      log.info("stale turn revalidated", {
-        ch: channelId,
-        action: reconsidered.action,
-        audience: reconsidered.audience,
-        reason: reconsidered.reason,
-        newer: refreshed.messagesAfterFocus,
-      });
-      if (reconsidered.action === "respond" && act.addressed) {
-        coalescer.noteActivity(act);
-      }
-      return;
-    }
+    if (result.error) return;
+    // The same agent refreshed the room through finish_turn. A new event after
+    // that snapshot will receive its own serialized turn; don't post a stale draft.
+    if (roomHasChanged()) return;
 
     // Natural text IS the reply: post the model's message (attaching any generated
     // images) unless it already posted one (e.g. in a thread). A react-only turn

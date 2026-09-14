@@ -13,9 +13,9 @@
     "dev": "tsc -p tsconfig.json && node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json && DISCORD_TOKEN=x GRID_API_KEY=x STATE_DB_PATH=:memory: node --test $(find dist -name '*.test.js')",
-    "eval": "tsc -p tsconfig.json && node dist/eval.js",
+    "eval": "tsc -p tsconfig.json && STATE_DB_PATH=:memory: node dist/participationEval.js",
     "eval:moderation": "tsc -p tsconfig.json && node dist/moderationEval.js",
-    "eval:conversation": "tsc -p tsconfig.json && node dist/conversationEval.js",
+    "eval:conversation": "npm run eval",
     "eval:discord-context": "tsc -p tsconfig.json && node dist/discordContextEval.js",
     "eval:context": "tsc -p tsconfig.json && node dist/contextEval.js",
     "smoke": "tsc -p tsconfig.json && node dist/smoke.js"
@@ -35,6 +35,6 @@
     "typescript": "^5.6.3"
   },
   "overrides": {
-    "undici": "6.27.0"
+    "undici": "6.28.0"
   }
 }

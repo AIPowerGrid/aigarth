@@ -21,9 +21,9 @@ export interface DiscordActions {
   /** Post into a thread off the triggering message (creating it if needed). */
   replyInThread(text: string, threadName?: string): Promise<void>;
   /** Open a community vote to ban the user (passes only on enough human votes). */
-  startBanPoll(reason: string): Promise<void>;
+  startBanPoll(reason: string, target?: "focus" | "reply"): Promise<void>;
   /** Open a community vote to delete the message (passes only on enough votes). */
-  startDeletePoll(reason: string): Promise<void>;
+  startDeletePoll(reason: string, target?: "focus" | "reply"): Promise<void>;
   /** Whether moderation polls are available here (guild + not a DM). */
   canModerate: boolean;
   /** Mute itself in this channel for N minutes (lurk/snooze). */
@@ -100,17 +100,18 @@ export function makeBanPollTool(actions: DiscordActions): AgentTool {
       "scammers may pose as generic support or a trusted person without saying AIPG and " +
       "may use any link, invite, DM, form, account, or payment destination. A link, invite, " +
       "new account, disagreement, criticism, or annoying behavior is not enough alone. When " +
-      "the triggering message is a reply, the vote targets the replied-to user. Never " +
+      "you choose target=reply, the vote targets the replied-to user; otherwise the focus author. Never " +
       "use it to win an argument or against people just being annoying.",
     parameters: Type.Object({
       reason: Type.String({ description: "Plain, specific reason shown on the vote (what they did)." }),
+      target: Type.Optional(Type.Union([Type.Literal("focus"), Type.Literal("reply")])),
     }),
     execute: async (_id, params: any) => {
       if (!actions.canModerate) {
         return { content: [{ type: "text", text: "can't open a vote here (not a guild channel)" }], details: {} };
       }
       try {
-        await actions.startBanPoll(String(params.reason ?? "no reason given"));
+        await actions.startBanPoll(String(params.reason ?? "no reason given"), params.target ?? "focus");
         return { content: [{ type: "text", text: "ban poll opened — the community will decide" }], details: {} };
       } catch (e) {
         return { content: [{ type: "text", text: `couldn't open ban poll: ${e}` }], details: {} };
@@ -126,17 +127,18 @@ export function makeDeletePollTool(actions: DiscordActions): AgentTool {
     description:
       "Open a COMMUNITY VOTE to delete this message. You are not deleting it — it's " +
       "removed only if enough humans vote ✅. Use for clear spam/scam/NSFW posts that " +
-      "should come down but don't necessarily warrant a ban. When the triggering " +
-      "message is a reply, the vote targets the replied-to message.",
+      "should come down but don't necessarily warrant a ban. Default target=focus; " +
+      "choose target=reply explicitly to target the replied-to message.",
     parameters: Type.Object({
       reason: Type.String({ description: "Plain, specific reason shown on the vote." }),
+      target: Type.Optional(Type.Union([Type.Literal("focus"), Type.Literal("reply")])),
     }),
     execute: async (_id, params: any) => {
       if (!actions.canModerate) {
         return { content: [{ type: "text", text: "can't open a vote here (not a guild channel)" }], details: {} };
       }
       try {
-        await actions.startDeletePoll(String(params.reason ?? "no reason given"));
+        await actions.startDeletePoll(String(params.reason ?? "no reason given"), params.target ?? "focus");
         return { content: [{ type: "text", text: "delete poll opened — the community will decide" }], details: {} };
       } catch (e) {
         return { content: [{ type: "text", text: `couldn't open delete poll: ${e}` }], details: {} };

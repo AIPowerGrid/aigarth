@@ -70,7 +70,7 @@ function formatRoomMessage(message: RoomMessage, focusId: string, latestId: stri
         message.replyTo.preview ? `: "${oneLine(message.replyTo.preview, MAX_REPLY_PREVIEW)}"` : ""
       }]`
     : "";
-  return `${markers}[${timestamp(message.createdTimestamp)}] ${identity}${reply}: ${payload(message)}`;
+  return `${markers}[${timestamp(message.createdTimestamp)} id=${message.id}] ${identity}${reply}: ${payload(message)}`;
 }
 
 /**
@@ -247,7 +247,7 @@ export async function getRoomContext(
     const fetched = await focus.channel.messages.fetch({ limit });
     const all = new Map<string, Message>();
     for (const message of fetched.values()) all.set(message.id, message);
-    all.set(focus.id, focus);
+    if (!all.has(focus.id)) all.set(focus.id, focus);
 
     if (focus.reference?.messageId && !all.has(focus.reference.messageId)) {
       const referenced = await focus.fetchReference().catch(() => null);

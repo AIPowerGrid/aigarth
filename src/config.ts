@@ -35,9 +35,9 @@ export const config = {
   // Grid — the agent's brain runs on our OWN grid (dogfooding).
   gridApiKey: req("GRID_API_KEY"),
   gridV1Url: process.env.GRID_V1_URL ?? "https://api.aipowergrid.io/v1",
-  gridChatModel: process.env.GRID_CHAT_MODEL ?? "gpt-oss-120b",
+  gridChatModel: process.env.GRID_CHAT_MODEL ?? "qwen3-27b",
   gridContextWindow: num("GRID_CONTEXT_WINDOW", 32000),
-  gridMaxTokens: num("GRID_MAX_TOKENS", 2048),
+  gridMaxTokens: num("GRID_MAX_TOKENS", 4096),
   // Chat sampling. The old (more natural) JSON-era bot used temp 0.7 / top_p 0.92
   // / top_k 100 / rep_pen 1.1 — pi-ai's defaults left these unset, which is why
   // the new bot felt flat and repeated openers ("Hey half… 🚀 / Hey half… 🚀").
@@ -46,16 +46,15 @@ export const config = {
   chatTemperature: num("CHAT_TEMPERATURE", 0.7),
   chatTopP: num("CHAT_TOP_P", 0.92),
   chatTopK: num("CHAT_TOP_K", 100),
-  chatRepetitionPenalty: num("CHAT_REPETITION_PENALTY", 1.1),
-  chatFrequencyPenalty: num("CHAT_FREQUENCY_PENALTY", 0.3),
-  chatPresencePenalty: num("CHAT_PRESENCE_PENALTY", 0.2),
+  // Do not penalize repeating exact technical names or tool arguments.
+  chatRepetitionPenalty: num("CHAT_REPETITION_PENALTY", 1),
+  chatFrequencyPenalty: num("CHAT_FREQUENCY_PENALTY", 0),
+  chatPresencePenalty: num("CHAT_PRESENCE_PENALTY", 0),
 
-  // Image gen (Horde async API). NOTE: api.aipowergrid.io and grid.aipowergrid.io
-  // are SEPARATE deployments with SEPARATE keys — chat lives on grid., images +
-  // horde status on api.. So the image key can differ from GRID_API_KEY.
+  // Current Grid media endpoints; optionally a separate scoped image credential.
   gridImageBaseUrl: process.env.GRID_IMAGE_BASE_URL ?? "https://api.aipowergrid.io",
   gridImageApiKey: process.env.GRID_IMAGE_API_KEY ?? process.env.GRID_API_KEY ?? "",
-  // Grid status/horde API host (status, workers, models).
+  // Public Grid /v1 status host, no key.
   gridStatusUrl: process.env.GRID_STATUS_URL ?? "https://api.aipowergrid.io",
 
   // Vision — a SEPARATE, image-capable model (the chat model usually isn't).
@@ -90,12 +89,12 @@ export const config = {
   historyMaxChars: num("HISTORY_MAX_CHARS", 24000),
   // At attention time, synchronize this many currently visible Discord
   // messages. This includes missed/offline messages, other bots, replies,
-  // attachments, embeds, and reactions before the judge or full agent runs.
+  // attachments, embeds, and reactions before the participant runs.
   discordContextLimit: num("DISCORD_CONTEXT_LIMIT", 50),
   // Older messages are folded into a compact durable channel summary. Summaries
   // never replace the recent verbatim window; they provide continuity behind it.
   gridSummaryModel:
-    process.env.GRID_SUMMARY_MODEL ?? process.env.GRID_GATE_MODEL ?? process.env.GRID_CHAT_MODEL ?? "gpt-oss-120b",
+    process.env.GRID_SUMMARY_MODEL ?? process.env.GRID_CHAT_MODEL ?? "qwen3-27b",
   summaryMinBatch: num("SUMMARY_MIN_BATCH", 8),
   summaryBatchSize: num("SUMMARY_BATCH_SIZE", 40),
   summaryMaxChars: num("SUMMARY_MAX_CHARS", 4000),
@@ -103,9 +102,6 @@ export const config = {
   // Privacy-conservative automatic extraction of user-volunteered durable facts.
   // Per-user !memory off always overrides this global switch.
   autoMemoryEnabled: bool("AUTO_MEMORY_ENABLED", true),
-  // Per-user cooldown between agent runs (ms) — pure cost/abuse control, NOT a
-  // content decision (whether/how to engage is the model's call).
-  userCooldownMs: num("USER_COOLDOWN_MS", 4000),
   // "Spoke recently" window: if the bot posted in a channel within this window,
   // the model is told so (context signal) so it doesn't dominate the room.
   selfThrottleMs: num("SELF_THROTTLE_MS", 120000),
@@ -115,10 +111,6 @@ export const config = {
   // A directly-addressed message uses the shorter window (respond promptly).
   convSettleMs: num("CONV_SETTLE_MS", 1500),
   convSettleAddressedMs: num("CONV_SETTLE_ADDRESSED_MS", 500),
-  // Model that decides engagement for every eligible message. Default to the same
-  // capable model as chat; participation judgment is part of the agent's behavior,
-  // not a structural mention/reply shortcut.
-  gridGateModel: process.env.GRID_GATE_MODEL ?? process.env.GRID_CHAT_MODEL ?? "gpt-oss-120b",
   // Hard ceiling on a single agent turn. If a grid worker stalls mid-stream the turn
   // is aborted so it can't hang forever (generous, to allow slow image gen).
   turnTimeoutMs: num("TURN_TIMEOUT_MS", 120000),

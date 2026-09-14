@@ -8,13 +8,16 @@ registers them per turn.
 
 ## Ownership
 
-- `discordActions.ts` — the bot's Discord participation as tools, backed by per-turn
+- `participation.ts` - `finish_turn` records silent/reply as the sole final text
+  decision; `read_channel_history` reads only the current channel. Free text is private.
+- `discordActions.ts` — Discord tool factories, backed by per-turn
   callbacks (`DiscordActions`) supplied by `index.ts`: `reply` (the real chat message —
   free text is NOT sent), `reply_in_thread`, `start_ban_poll` / `start_delete_poll`
-  (community votes, only enacted by human ✅; registered only when `canModerate`), `snooze`
-  (mute self in-channel — the coalescer checks `snoozedUntil`), `set_presence`, `set_nickname`
+  (community votes, only enacted by human ✅; registered only when `canModerate`).
+  Legacy reply/thread/snooze factories remain unregistered; the
+  participant uses finish_turn and cannot mute future model attention. `set_presence`, `set_nickname`
   (guild-only), `create_poll` (native Discord poll), `remind` (persisted; delivered by a timer
-  in `index.ts`). `react` lives in `react.ts`. This is how the model acts; silence = none of them.
+  in `index.ts`). `react` lives in `react.ts`. Final silence is explicit finish_turn.
 - `generateImage.ts` — `generate_image`: Grid `/v1/images/generations`, driven by the
   `images/` registry; URL returned via `details.images`.
 - `remixImage.ts` — `remix_image`: img2img on a source URL, and `remixLast.ts` —
@@ -26,13 +29,15 @@ registers them per turn.
 - `docs.ts` — `read_doc` / `grep_docs` / `list_docs` over `docs/store.ts`.
 - `crypto.ts` — `crypto_price` / `search_coin` (CoinGecko, structured + cached).
   `cryptoChart.ts` — `crypto_chart` (QuickChart image via `details.images`).
-- `gridStatus.ts` — `grid_status`: live worker/queue/model stats (horde status host).
+- `gridStatus.ts` - `grid_status`, `validator_status`, `release_info`: fixed public
+  `/v1` and official GitHub endpoints, timestamps, source URLs, bounded responses,
+  no credentials, no redirects. Include preview releases. Errors mean unknown, not
+  zero, and do not establish that the user's credential is invalid.
 - `linkPreview.ts` — `fetch_link_preview` (OG preview). `readWebpage.ts` — `read_webpage`
   (full page text). `webSearch.ts` — `web_search` (DuckDuckGo HTML via the SSRF-guarded
   fetch; no API key). All three SSRF-guarded + untrusted-fenced.
-- `mood.ts` — `set_mood` (own vibe, persisted in `settings`, shown in context) + `set_chattiness`
-  (self-tune the participation threshold used by the judge). `getMood()` is read by
-  `agent.ts` contextBlock.
+- `mood.ts` - legacy mood/chattiness factories, not registered by the participant.
+  No numeric participation threshold is applied before the model.
 - `vision.ts` — `describe_image`: separate `GRID_VISION_MODEL`; SSRF-guarded, MIME-sniffed.
   Registered only when a vision model is configured.
 - `channelStatus.ts` — `set_channel_status` (writes `store/db.ts` channel status).

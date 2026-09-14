@@ -9,7 +9,6 @@ import { config } from "../config.js";
  * cheap facts the model is then *shown* so it can decide well:
  *
  *   isCommand        — `!` admin commands bypass the agent entirely.
- *   passCooldown     — per-user rate limit (don't let one person spam the brain).
  *   canSend          — rolling per-channel reply ceiling (don't flood a channel).
  *   recordBotSend     — feeds canSend + botSpokeRecently.
  *   botSpokeRecently — a context signal: "you just spoke here, don't dominate".
@@ -17,7 +16,6 @@ import { config } from "../config.js";
  * None of these read message *content* — they're frequency limits and clocks.
  */
 
-const lastUserRun = new Map<string, number>();
 const botSends = new Map<string, number[]>(); // channelId -> recent send timestamps
 
 export function isCommand(content: string): boolean {
@@ -44,13 +42,4 @@ export function botSpokeRecently(channelId: string): boolean {
   const arr = botSends.get(channelId) ?? [];
   const last = arr[arr.length - 1] ?? 0;
   return Date.now() - last < config.selfThrottleMs;
-}
-
-/** Per-user cooldown to cap cost/abuse. Returns true if allowed (and stamps). */
-export function passCooldown(userId: string): boolean {
-  const now = Date.now();
-  const prev = lastUserRun.get(userId) ?? 0;
-  if (now - prev < config.userCooldownMs) return false;
-  lastUserRun.set(userId, now);
-  return true;
 }
