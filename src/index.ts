@@ -11,7 +11,7 @@ import { log } from "./util/log.js";
 import { messages, banVotes, reminders } from "./store/db.js";
 import { isCommand } from "./discord/transport.js";
 import { handleCommand } from "./discord/commands.js";
-import { handleVoteReaction } from "./discord/scam.js";
+import { handleVoteReaction, handleModerationButton, reconcileBan, reconcileCases, observeDeletion, observeEdit } from "./discord/scam.js";
 import { createCoalescer, type Activity, type Coalescer } from "./discord/coalescer.js";
 import { processActivity } from "./discord/turn.js";
 import { renderMentions } from "./discord/render.js";
@@ -61,9 +61,10 @@ client.once(Events.ClientReady, (c) => {
   // Periodic housekeeping: prune old history + expire stale votes.
   setInterval(() => {
     const removed = messages.cleanup(30);
-    banVotes.expire(config.banVoteTtlMs);
+    void reconcileCases(client);
     if (removed) log.debug("history cleanup", { removed });
   }, 6 * 3600 * 1000).unref();
+  void reconcileCases(client);
 
   // Reminder delivery: post due reminders (the `remind` tool), pinging the user.
   setInterval(async () => {
@@ -182,7 +183,18 @@ async function onReaction(reaction: any, user: any, add: boolean) {
 }
 client.on(Events.MessageReactionAdd, (r, u) => onReaction(r, u, true));
 client.on(Events.MessageReactionRemove, (r, u) => onReaction(r, u, false));
+client.on(Events.InteractionCreate, interaction => {
+  void handleModerationButton(interaction).catch(error => log.error("moderation button failed", { err: String(error) }));
+});
+client.on(Events.GuildBanAdd, ban => {
+  void reconcileBan(client, ban.guild.id, ban.user.id).catch(error => log.error("ban reconciliation failed", { err: String(error) }));
+});
+client.on(Events.MessageUpdate, (_old, message) => {
+  if (typeof message.content === "string") void observeEdit(client, message.id, message.content)
+    .catch(error => log.error("moderation edit capture failed", { err: String(error) }));
+});
 client.on(Events.MessageDelete, (message) => {
+  void observeDeletion(client, message.id).catch(error => log.error("deletion reconciliation failed", { err: String(error) }));
   const vote = banVotes.activeForSourceMessage(message.id);
   if (vote) {
     log.warn("moderation source deleted; ban poll and captured evidence remain active", {

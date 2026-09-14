@@ -21,7 +21,7 @@ reconsider an answer that someone else has already given.
 - Curated docs read/search and additional history in the current Discord channel.
 - Image generation/remixing, crypto data, web search and optional vision.
 - User-controlled safe memory and reminders.
-- Human-voted moderation proposals, never unilateral bans or slashing.
+- Human-approved moderation proposals, never autonomous AI bans or slashing.
 
 Operational claims need a current source. Release availability does not prove a
 Core feature is enabled. Failed lookups mean unknown, not zero or user error.
@@ -48,6 +48,20 @@ secret configuration. It is loaded each turn and treated as historical orientati
 
 Privacy controls: `!memory`, `!memory on|off`, `!forget <phrase|all>`.
 Permissions, human voting, deduplication and output rate limits remain mechanical.
+
+## Moderation
+
+Qwen proposes a case; moderators use **Ban**, **Delete message**, or **Dismiss**.
+Buttons verify current Discord permissions, source card and role hierarchy on the
+server. Ban/dismiss-ban needs Ban Members; delete needs Manage Messages. Reaction
+quorum remains available to eligible moderators, not arbitrary human accounts.
+
+Manual bans close matching cases automatically. Deleting a source message preserves
+a ban proposal and its redacted evidence. Repeated reports attach to one active case
+per target. Cases expire after `BAN_VOTE_TTL_MS`; failed API actions stay open.
+Redacted originals and latest observed edits/deletions are kept locally for 30 days,
+not fed into conversational memory or automatic training. Messages never observed
+by the bot cannot be reconstructed after deletion.
 
 ## Verify
 

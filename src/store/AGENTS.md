@@ -29,6 +29,11 @@ local per-user facts. Replaces the legacy `conversation_db.py`.
   Active votes are queryable by target and source message so duplicate moderation polls are suppressed
   and deletion of a flagged source can be observed without losing the vote.
 - This is the only module that opens the sqlite DB; everything else uses these APIs.
+- `moderation_evidence` stores bounded redacted original snapshots and latest observed
+  edit/deletion metadata, linked to persisted cases. Originals are never overwritten.
+  Purge evidence after 30 days. Case outcomes record approving actor when available;
+  external ban events do not invent an actor. Do not feed records into memory/training
+  automatically. Schema upgrades are additive and preserve existing cases/history.
 
 ## Work Guidance
 

@@ -87,15 +87,20 @@ link previews, memory), not a prompt-stuffed mega-prompt. Entry point: `src/inde
   cannot be fetched; older messages are folded into a persisted channel summary. Durable
   per-user facts are separate, non-sensitive, capped, and controlled by `!memory` /
   `!forget`. Credential-shaped values are redacted before persistence.
-- **Moderation is community-decided, never the AI alone.** The AI may only *propose*
-  bans/deletes via `start_ban_poll` / `start_delete_poll`; they enact only on
-  `BAN_VOTE_THRESHOLD` human ✅ votes. The same agent judges intent and room
+- **Moderation requires authorized humans, never the AI alone.** The AI may only *propose*
+  bans/deletes via `start_ban_poll` / `start_delete_poll`. Moderator buttons allow
+  direct approval; reaction quorum counts only freshly verified eligible moderators.
+  Ban/dismiss-ban require Ban Members and appropriate role hierarchy; deleting
+  requires Manage Messages. The same agent judges intent and room
   context without keyword/domain rules, then opens a poll or does nothing. Evidence is
   captured before a flash deletion, duplicate active polls are suppressed, and the bot
   never self-votes. The production Discord role must have
   `Ban Members` and sit above target roles; startup warns if enforcement is unavailable.
   Recently deleted messages are requeued with an immutable snapshot for AI review; deletion
   is evidence of timing, not proof of abuse.
+  External bans close matching cases; outcomes update cards and remove buttons.
+  Deleting evidence does not dismiss a ban proposal. Redacted evidence is retained
+  locally for 30 days, outside conversational memory; decisions are not auto-training.
 
 ## Work Guidance
 

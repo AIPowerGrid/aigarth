@@ -44,7 +44,23 @@ There is no silent fallback to another model. Failed turns do not publish a draf
 
 Source and runtime were on 55011ab before this rollout. The private operational
 checkpoint contains the previous runtime, environment and a consistent SQLite
-backup. Database schema is unchanged; preserve new history during any code rollback.
+backup. The initial Qwen rollout did not change schema; preserve new history during any code rollback.
 
 Deployment confirmation is recorded in that private checkpoint; no credentials,
 private hostnames or infrastructure paths belong in this repository.
+
+## Moderation follow-up
+
+- Authorized moderator buttons (Ban, Delete message, Dismiss) with fresh permissions,
+  role hierarchy, source-card binding, expiry and concurrent-action protection.
+- Restricted reaction quorum; arbitrary members cannot vote someone into a ban.
+- External ban reconciliation, outcome cards, retained original evidence and latest
+  observed edit/deletion metadata. Duplicate reports attach to one active case.
+- Additive SQLite fields/table; retain backups before deployment. Original message
+  snapshots are redacted and expire after 30 days; no automatic training on decisions.
+- 54 hermetic tests pass, including forged controls, role escalation, failed actions,
+  concurrent clicks, manual bans, immutable evidence and expired/revoked approval.
+- Tests mock Discord writes. No real member is banned or used as a test target.
+- This is the practical moderation workflow, not autonomous punishment or a new
+  private moderation dashboard. Cases stay in their existing channel; locally retained
+  evidence is not publicly expanded. Curated feedback evaluation remains future work.

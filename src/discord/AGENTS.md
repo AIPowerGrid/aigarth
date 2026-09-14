@@ -26,6 +26,14 @@
 - Moderation polls default to the focus author; a replied-to target is explicit.
   A reporter must never be automatically targeted for someone else's quoted abuse.
 - Preserve immutable flash-deletion evidence; deletion alone is not proof of abuse.
+- Moderator buttons are bound to persisted guild/channel/card IDs and checked
+  against freshly fetched permissions and role hierarchy. No model tool can approve.
+  Reactions count only eligible moderators; revalidate the quorum before acting.
+  Failed Discord calls leave cases open. Only Unknown Message means already deleted.
+- One active case per target in a guild accumulates redacted source evidence.
+  Manual/external bans and startup reconciliation close cases; source deletion
+  preserves ban proposals. Cards show outcomes with buttons removed when closed.
+  Cases expire after the configured TTL; check TTL on interaction as well as cleanup.
 - Conversation read-only channels can be reviewed for moderation, never chatted in.
 - Public posts use `SAFE_MENTIONS`. Never allow unintended user/role/everyone pings.
 

@@ -100,6 +100,9 @@ for (const stmt of [
   "ALTER TABLE messages ADD COLUMN message_id TEXT",
   "ALTER TABLE ban_votes ADD COLUMN action TEXT NOT NULL DEFAULT 'moderate'",
   "ALTER TABLE ban_votes ADD COLUMN target_msg_id TEXT",
+  "ALTER TABLE ban_votes ADD COLUMN outcome TEXT",
+  "ALTER TABLE ban_votes ADD COLUMN actor_id TEXT",
+  "ALTER TABLE ban_votes ADD COLUMN resolved_ts INTEGER",
 ]) {
   try {
     db.exec(stmt);
@@ -108,6 +111,20 @@ for (const stmt of [
   }
 }
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id) WHERE message_id IS NOT NULL");
+db.exec(`CREATE TABLE IF NOT EXISTS moderation_evidence (
+  case_id TEXT NOT NULL REFERENCES ban_votes(message_id),
+  message_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  observed_ts INTEGER NOT NULL,
+  deleted_ts INTEGER,
+  PRIMARY KEY(case_id, message_id)
+);`);
+for (const column of ["edited_ts INTEGER", "edited_content TEXT"]) {
+  const name = column.split(" ")[0];
+  const columns = db.prepare("PRAGMA table_info(moderation_evidence)").all() as { name: string }[];
+  if (!columns.some(c => c.name === name)) db.exec(`ALTER TABLE moderation_evidence ADD COLUMN ${column}`);
+}
 
 const clamp = (s: string) => (s.length > MAX_CONTENT ? s.slice(0, MAX_CONTENT) : s);
 
@@ -426,7 +443,7 @@ const insVote = db.prepare(`
 const getVote = db.prepare("SELECT * FROM ban_votes WHERE message_id = ? AND resolved = 0");
 const getActiveTargetVote = db.prepare(
   `SELECT * FROM ban_votes
-   WHERE guild_id = ? AND target_id = ? AND action = ? AND resolved = 0
+   WHERE guild_id = ? AND target_id = ? AND resolved = 0
    ORDER BY created_ts DESC LIMIT 1`,
 );
 const getTargetMessageVote = db.prepare(
@@ -435,7 +452,7 @@ const getTargetMessageVote = db.prepare(
    ORDER BY created_ts DESC LIMIT 1`,
 );
 const setVoteSets = db.prepare("UPDATE ban_votes SET up_json = ?, down_json = ? WHERE message_id = ?");
-const resolveVote = db.prepare("UPDATE ban_votes SET resolved = 1 WHERE message_id = ?");
+const resolveVote = db.prepare("UPDATE ban_votes SET resolved = 1, outcome = ?, actor_id = ?, resolved_ts = ? WHERE message_id = ? AND resolved = 0");
 const expireVotes = db.prepare("UPDATE ban_votes SET resolved = 1 WHERE resolved = 0 AND created_ts < ?");
 
 export type VoteAction = "moderate" | "ban" | "delete";
@@ -450,6 +467,8 @@ export interface BanVote {
   target_msg_id: string | null;
   up: string[];
   down: string[];
+  created_ts: number;
+  outcome: string | null;
 }
 
 function asBanVote(row: any): BanVote | null {
@@ -473,7 +492,7 @@ export const banVotes = {
     return asBanVote(getVote.get(messageId));
   },
   activeForTarget(guildId: string, targetId: string, action: VoteAction): BanVote | null {
-    return asBanVote(getActiveTargetVote.get(guildId, targetId, action));
+    return asBanVote(getActiveTargetVote.get(guildId, targetId));
   },
   activeForSourceMessage(messageId: string): BanVote | null {
     return asBanVote(getTargetMessageVote.get(messageId));
@@ -481,8 +500,29 @@ export const banVotes = {
   setVotes(messageId: string, up: string[], down: string[]) {
     setVoteSets.run(JSON.stringify(up), JSON.stringify(down), messageId);
   },
-  resolve(messageId: string) {
-    resolveVote.run(messageId);
+  resolve(messageId: string, outcome = "resolved", actorId: string | null = null) {
+    resolveVote.run(outcome, actorId, Date.now(), messageId);
+  },
+  allActive(): BanVote[] {
+    return db.prepare("SELECT * FROM ban_votes WHERE resolved = 0").all().map(asBanVote) as BanVote[];
+  },
+  addEvidence(caseId: string, messageId: string, channelId: string, content: string) {
+    db.prepare(`INSERT OR IGNORE INTO moderation_evidence
+      (case_id,message_id,channel_id,content,observed_ts) VALUES (?,?,?,?,?)`)
+      .run(caseId, messageId, channelId, redactStoredContent(content).slice(0, 4000), Date.now());
+  },
+  evidence(caseId: string): any[] {
+    return db.prepare("SELECT * FROM moderation_evidence WHERE case_id = ? ORDER BY observed_ts LIMIT 50").all(caseId);
+  },
+  markDeleted(messageId: string) {
+    db.prepare("UPDATE moderation_evidence SET deleted_ts = ? WHERE message_id = ?").run(Date.now(), messageId);
+  },
+  markEdited(messageId: string, content: string) {
+    db.prepare("UPDATE moderation_evidence SET edited_ts = ?, edited_content = ? WHERE message_id = ?")
+      .run(Date.now(), redactStoredContent(content).slice(0, 4000), messageId);
+  },
+  pruneEvidence() {
+    db.prepare("DELETE FROM moderation_evidence WHERE observed_ts < ?").run(Date.now() - 30 * 86400_000);
   },
   expire(ttlMs: number) {
     expireVotes.run(Date.now() - ttlMs);
