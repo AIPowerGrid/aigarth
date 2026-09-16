@@ -3,7 +3,6 @@ import {
   GatewayIntentBits,
   Events,
   Partials,
-  PermissionFlagsBits,
   type Message,
 } from "discord.js";
 import { config } from "./config.js";
@@ -16,6 +15,7 @@ import { createCoalescer, type Activity, type Coalescer } from "./discord/coales
 import { processActivity } from "./discord/turn.js";
 import { renderMentions } from "./discord/render.js";
 import { PROMPT_VERSION } from "./prompts.js";
+import { moderationReadiness } from "./discord/readiness.js";
 import { maybeRefreshChannelSummary } from "./conversationSummary.js";
 
 const client = new Client({
@@ -44,18 +44,18 @@ coalescer = createCoalescer({
 const recentActivities = new Map<string, Activity>();
 const receivedIds = new Set<string>();
 
-client.once(Events.ClientReady, (c) => {
+client.once(Events.ClientReady, async (c) => {
   log.info("aigarth online", {
     tag: c.user.tag,
     chatModel: config.gridChatModel,
     prompts: PROMPT_VERSION,
   });
   for (const guild of c.guilds.cache.values()) {
-    const me = guild.members.me;
-    if (!me?.permissions.has(PermissionFlagsBits.BanMembers)) {
-      log.warn("moderation enforcement unavailable; grant Aigarth Ban Members", {
-        guildId: guild.id,
-      });
+    try {
+      const state = await moderationReadiness(guild);
+      (state.community_ban_preflight_ready ? log.info : log.warn)("moderation readiness", state);
+    } catch {
+      log.warn("moderation readiness", { guild_id: guild.id, community_ban_preflight_ready: false, reason: "lookup_failed" });
     }
   }
   // Periodic housekeeping: prune old history + expire stale votes.
@@ -88,6 +88,7 @@ client.once(Events.ClientReady, (c) => {
 // Ingestion: per-message bookkeeping (history, commands, eligibility, signals),
 // then hand the channel's current state to the coalescer.
 client.on(Events.MessageCreate, async (message) => {
+  const receivedAt = Date.now();
   try {
     if (message.author.bot) return;
     if (receivedIds.has(message.id)) return;
@@ -96,7 +97,7 @@ client.on(Events.MessageCreate, async (message) => {
     const inTracked = !message.guild || TRACKED.size === 0 || TRACKED.has(message.channelId);
     log.info("msg recv", {
       ch: message.channelId,
-      author: message.author.username,
+      message_id: message.id,
       inTracked,
       len: message.content.length,
       guild: !!message.guild,
@@ -155,7 +156,7 @@ client.on(Events.MessageCreate, async (message) => {
       .map((a) => a.url);
 
     const activity: Activity = {
-      message, inTracked, respondable, content, modTarget,
+      message, receivedAt, inTracked, respondable, content, modTarget,
       mentioned, repliedToBot, named, isDM, addressed, imageUrls,
     };
     if (message.guild) {

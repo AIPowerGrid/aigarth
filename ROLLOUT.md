@@ -79,3 +79,33 @@ private hostnames or infrastructure paths belong in this repository.
   No new roles, bot permissions or member assignments were made. Runtime binds the
   existing role by ID. This accepts collusion risk among Members-role accounts;
   separate account IDs do not establish independent people.
+
+## Observability and context follow-up - 2026-09-16
+
+- Every queued event has a unique trace ID. Model rounds, tool timings, context
+  refreshes and a terminal outcome can be joined to its Discord message ID.
+- Failure and stale-output paths emit terminal records, not ambiguous missing
+  logs. No raw message content, tool arguments or private reasoning in new traces.
+- The operational brief is bounded to 4,000 characters with an explicit review
+  date/age and 48-hour stale marker. It never overrides live capabilities.
+- Evaluation now includes the missed price question, human answers arriving
+  mid-turn, scam reporters and benign deletions. All Discord effects are stubbed.
+- Fresh read-only Discord check: Ban Members is missing; bot role position 23 is
+  above configured Members at 21. Manage Messages is present. Ban enforcement is
+  NOT production-ready until the maintainer grants the missing permission and
+  per-target checks pass. No permissions or role assignments changed by this work.
+- Initial live evaluation: 11/14 passed. One attribution lookup used saved memory
+  instead of channel history; two requests were rate-limited. Tool guidance was
+  clarified and evaluation requests paced, without throttling live participation.
+- A subsequent run exposed a repeated finish-call loop and was stopped. Accepted
+  finish calls now use pi's termination hook; rejected attempts count toward the
+  tool budget. The model still decides participation; this is loop lifecycle,
+  not a semantic gate. Tests cover no epilogue, trailing calls, and attempt limits.
+- Final conversation run: 14/14 passed with live Qwen and stubbed Discord effects.
+  Live moderation selection: 5/5 passed with mocked ban/delete proposals; this
+  tests model judgment, not Discord permission or actual ban execution.
+  79 hermetic tests, typecheck/build and dependency audit passed (zero advisories).
+  Live read-only Discord context check synchronized 50 messages without duplicates.
+- Limits: behavior is probabilistic, not a guarantee of perfect silence or
+  diagnosis. Manual review still saw overly strong "I can tell you for sure"
+  phrasing about future troubleshooting; factual claims still need evidence.

@@ -14,6 +14,8 @@
 - `scam.ts`: evidence snapshots, persisted human votes, role/permission checks,
   deduplication and enforcement. The bot never votes for itself.
 - `commands.ts`: explicit privacy/admin commands. Unknown prefixes reach the agent.
+- `readiness.ts`: fresh read-only permission/role preflight. A positive result is
+  not proof that every target is bannable; enforcement still checks each target.
 
 ## Contracts
 
@@ -40,6 +42,11 @@
   Cases expire after the configured TTL; check TTL on interaction as well as cleanup.
 - Conversation read-only channels can be reviewed for moderation, never chatted in.
 - Public posts use `SAFE_MENTIONS`. Never allow unintended user/role/everyone pings.
+- Turn logs correlate queue, context, model and tools by `turn_id`, `message_id`
+  and `channel_id`. Exactly one `turn finished` records replied, silent, acted,
+  failed or superseded. `published_message` and `acted` preserve partial effects
+  even if a later error prevents successful completion. Queue age and newer-message
+  counts expose stale work without introducing a semantic participation filter.
 
 ## Verification
 

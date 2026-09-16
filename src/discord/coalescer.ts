@@ -1,10 +1,16 @@
 import type { Message, OmitPartialGroupDMChannel } from "discord.js";
+import { randomUUID } from "node:crypto";
+import { log } from "../util/log.js";
 
 /** A message from the MessageCreate event — its channel is guaranteed sendable. */
 export type EventMessage = OmitPartialGroupDMChannel<Message>;
 
 /** Everything the runner needs to process one channel turn. */
 export interface Activity {
+  traceId?: string;
+  receivedAt?: number;
+  enqueuedAt?: number;
+  queueDepth?: number;
   message: EventMessage;
   inTracked: boolean;
   /** False for history-only channels: safety review may run, visible
@@ -68,7 +74,10 @@ export function createCoalescer(opts: {
     // Preserve every eligible message. Dedup only the same pending event, never
     // prioritize or discard based on addressing/content. Deletion is a new event.
     if (act.message.id && st.pending.some(p => p.message.id === act.message.id && !!p.deleted === !!act.deleted)) return;
-    st.pending.push(act);
+    const queued = { ...act, traceId: randomUUID(), enqueuedAt: Date.now(), queueDepth: st.pending.length + Number(st.running) };
+    st.pending.push(queued);
+    log.info("turn queued", { turn_id: queued.traceId, message_id: act.message.id,
+      channel_id: channelId, queue_depth: queued.queueDepth, deleted: !!act.deleted });
     if (st.running) return;
     arm(channelId);
   }

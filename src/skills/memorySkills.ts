@@ -68,9 +68,9 @@ export function makeRecallTool(getTags: () => string[]): AgentTool {
     name: "recall",
     label: "Recall",
     description:
-      "Search your long-term memory for relevant facts before answering when the " +
-      "user references something personal or past ('what did I say about…', " +
-      "'remember when…').",
+      "Search saved long-term facts and preferences. This is NOT Discord message " +
+      "history: use read_channel_history for what someone said earlier in this " +
+      "channel, even when this tool finds no memories.",
     parameters: Type.Object({
       query: Type.String({ description: "What to recall." }),
     }),

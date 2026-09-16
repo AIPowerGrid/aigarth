@@ -1,10 +1,11 @@
 import { ActivityType, type Client, type MessageMentionOptions } from "discord.js";
 import { config } from "../config.js";
-import { log } from "../util/log.js";
+import { log, withLogContext } from "../util/log.js";
+import { randomUUID } from "node:crypto";
 import { channelSummaries, messages, settings, reminders } from "../store/db.js";
 import { recordBotSend, botSpokeRecently } from "./transport.js";
 import { openModerationVote } from "./scam.js";
-import { runTurn } from "../agent.js";
+import { runTurn, type TurnResult } from "../agent.js";
 import type { DiscordActions } from "../skills/discordActions.js";
 import type { Activity } from "./coalescer.js";
 import { stripImageMarkdown, chunk } from "./text.js";
@@ -23,38 +24,63 @@ const SAFE_MENTIONS: MessageMentionOptions = { parse: [], repliedUser: false };
  * Fresh context -> one participant -> explicitly chosen public output.
  * The per-channel queue owns serialization, not participation decisions.
  */
-export async function processActivity(client: Client, act: Activity): Promise<void> {
+class StaleRoomError extends Error {}
+type TurnDependencies = { getRoom?: typeof getRoomContext; runAgent?: typeof runTurn };
+export async function processActivity(client: Client, act: Activity, deps: TurnDependencies = {}): Promise<void> {
+  return withLogContext({ turn_id: act.traceId ?? randomUUID(), message_id: act.message.id,
+    channel_id: act.message.channelId }, () => processTracedActivity(client, act, deps));
+}
+
+async function processTracedActivity(client: Client, act: Activity, deps: TurnDependencies): Promise<void> {
+  const started = performance.now();
+  const startedAt = Date.now();
+  const queueMs = Math.max(0, startedAt - (act.enqueuedAt ?? startedAt));
+  let outcome: "replied" | "silent" | "acted" | "failed" | "superseded" = "failed";
+  let failureReason: string | undefined;
+  let contextMs = 0;
+  let contextRefreshes = 0;
+  let result: TurnResult | undefined;
+  let sentAnything = false;
+  let postedMessage = false;
+  log.info("turn started", { queue_ms: queueMs, queue_depth: act.queueDepth ?? 0,
+    message_age_ms: Math.max(0, startedAt - (act.message.createdTimestamp ?? startedAt)),
+    deleted: !!act.deleted, model: config.gridChatModel });
   const channelId = act.message.channelId;
   const message = act.message;
   const modTarget = act.modTarget;
   const inTracked = act.inTracked;
-  // Immutable before any Discord fetch or Grid call. A flash deletion must not
-  // erase or retarget the evidence while the model is deciding.
-  const focusModerationSnapshot = {
-    userId: message.author.id,
-    messageId: message.id,
-    evidence: message.content || act.content,
-  };
-  const requestedModerationSnapshot = {
-    userId: modTarget.author.id,
-    messageId: modTarget.id,
-    evidence: modTarget.content,
-  };
   let typingTimer: ReturnType<typeof setInterval> | null = null;
   let typingChannel: any = null;
-
   try {
-    let room = await getRoomContext(client, message, {
-      limit: config.discordContextLimit,
-      maxChars: config.historyMaxChars,
-      persist: inTracked,
+    // Immutable before any Discord fetch or Grid call. A flash deletion must not
+    // erase or retarget the evidence while the model is deciding.
+    const focusModerationSnapshot = {
+      userId: message.author.id,
+      messageId: message.id,
+      evidence: message.content || act.content,
+    };
+    const requestedModerationSnapshot = {
+      userId: modTarget.author.id,
+      messageId: modTarget.id,
+      evidence: modTarget.content,
+    };
+    const getRoom = async () => {
+      const t = performance.now();
+      try { return await (deps.getRoom ?? getRoomContext)(client, message, {
+        limit: config.discordContextLimit, maxChars: config.historyMaxChars, persist: inTracked,
+      }); } finally { contextMs += Math.round(performance.now() - t); }
+    };
+    let room = await getRoom();
+    log.info("turn context loaded", {
+      source: room.source, visible_messages: room.visibleCount, messages_after_focus: room.messagesAfterFocus,
+      focus_is_latest: room.focusIsLatest, context_ms: contextMs,
     });
     const roomHasChanged = (): boolean =>
       !!room.latestMessageId &&
       (message.channel as any).lastMessageId !== room.latestMessageId;
     const requireCurrentRoom = (): void => {
       if (!act.respondable) throw new Error("Conversation output unavailable in this channel");
-      if (roomHasChanged()) throw new Error("Discord room changed while composing");
+      if (roomHasChanged()) throw new StaleRoomError();
     };
     const history = room.transcript;
     const channelSummary = channelSummaries.get(channelId)?.summary ?? "";
@@ -74,10 +100,10 @@ export async function processActivity(client: Client, act: Activity): Promise<vo
 
     const pendingImages: string[] = [];
     let firstReplySent = false;
-    let sentAnything = false; // any output (incl. react) — for the turn-done log
-    let postedMessage = false;
 
     const rememberSent = (sent: any, fallback: string): void => {
+      postedMessage = true;
+      if (sent?.channelId === channelId) room.latestMessageId = sent.id;
       recordBotSend(channelId);
       if (!inTracked || !sent?.id) return;
       messages.sync(
@@ -96,6 +122,7 @@ export async function processActivity(client: Client, act: Activity): Promise<vo
       requireCurrentRoom();
       const clean = stripImageMarkdown(text ?? "");
       const files = pendingImages.length ? await fetchAttachments(pendingImages.splice(0)) : [];
+      requireCurrentRoom();
       const parts = chunk(clean);
       if (parts.length === 0 && files.length === 0) return;
       if (!firstReplySent) {
@@ -178,20 +205,22 @@ export async function processActivity(client: Client, act: Activity): Promise<vo
       startBanPoll: async (reason: string, target = "focus") => {
         const moderationTarget = target === "reply" ? requestedModerationSnapshot : focusModerationSnapshot;
         if (!message.guild) return;
-        await openModerationVote({
+        const opened = await openModerationVote({
           channel: message.channel, guildId: message.guild.id, targetUserId: moderationTarget.userId,
           action: "ban", reason, evidence: moderationTarget.evidence, targetMsgId: moderationTarget.messageId,
         });
-        sentAnything = true;
+        sentAnything ||= opened === "opened";
+        log.info("moderation proposal result", { action: "ban", result: opened });
       },
       startDeletePoll: async (reason: string, target = "focus") => {
         const moderationTarget = target === "reply" ? requestedModerationSnapshot : focusModerationSnapshot;
         if (!message.guild) return;
-        await openModerationVote({
+        const opened = await openModerationVote({
           channel: message.channel, guildId: message.guild.id, targetUserId: moderationTarget.userId,
           action: "delete", reason, evidence: moderationTarget.evidence, targetMsgId: moderationTarget.messageId,
         });
-        sentAnything = true;
+        sentAnything ||= opened === "opened";
+        log.info("moderation proposal result", { action: "delete", result: opened });
       },
       canModerate: !!message.guild,
       inGuild: !!message.guild,
@@ -231,7 +260,7 @@ export async function processActivity(client: Client, act: Activity): Promise<vo
       },
     };
 
-    const result = await runTurn({
+    result = await (deps.runAgent ?? runTurn)({
             channelId,
             channelName: ("name" in message.channel ? (message.channel as any).name : undefined) ?? "DM",
             userId: message.author.id,
@@ -260,11 +289,12 @@ export async function processActivity(client: Client, act: Activity): Promise<vo
               return redactStoredContent(transcript).slice(-config.historyMaxChars);
             },
             refreshContext: async () => {
-              const fresh = await getRoomContext(client, message, {
-                limit: config.discordContextLimit, maxChars: config.historyMaxChars, persist: inTracked,
-              });
+              const fresh = await getRoom();
               const changed = fresh.transcript !== room.transcript;
               room = fresh;
+              contextRefreshes++;
+              log.info("turn context refreshed", { changed, source: fresh.source,
+                messages_after_focus: fresh.messagesAfterFocus, refresh_count: contextRefreshes });
               return changed ? fresh.transcript : undefined;
             },
             onImage: (u) => pendingImages.push(u),
@@ -273,6 +303,8 @@ export async function processActivity(client: Client, act: Activity): Promise<vo
     // Moderation review is intentionally silent. Its only visible output is a
     // community poll opened through one of the bounded moderation tools.
     if (moderationReview) {
+      outcome = result.error ? "failed" : sentAnything ? "acted" : "silent";
+      failureReason = result.failureReason;
       log.info("moderation review done", {
         ch: channelId,
         pollOpened: sentAnything,
@@ -281,10 +313,10 @@ export async function processActivity(client: Client, act: Activity): Promise<vo
       return;
     }
 
-    if (result.error) return;
+    if (result.error) { failureReason = result.failureReason ?? "agent_failed"; return; }
     // The same agent refreshed the room through finish_turn. A new event after
     // that snapshot will receive its own serialized turn; don't post a stale draft.
-    if (roomHasChanged()) return;
+    if (roomHasChanged()) { outcome = "superseded"; return; }
 
     // Natural text IS the reply: post the model's message (attaching any generated
     // images) unless it already posted one (e.g. in a thread). A react-only turn
@@ -304,10 +336,20 @@ export async function processActivity(client: Client, act: Activity): Promise<vo
         latest: act.content,
       });
     }
-    log.info("turn done", { ch: channelId, sent: sentAnything || postedMessage, error: result.error });
+    outcome = postedMessage ? "replied" : sentAnything ? "acted" : result.decision === "silent" ? "silent" : "failed";
+    if (outcome === "failed") failureReason = "empty_public_output";
   } catch (err) {
-    log.error("channel turn error", { err: String(err) });
+    outcome = err instanceof StaleRoomError ? "superseded" : "failed";
+    failureReason = outcome === "failed" ? "turn_exception" : undefined;
+    log.error("channel turn error", { failure_reason: failureReason ?? "room_changed" });
   } finally {
     if (typingTimer) clearInterval(typingTimer);
+    log.info("turn finished", { outcome, failure_reason: failureReason,
+      queue_ms: queueMs, total_ms: Math.round(performance.now() - started),
+      end_to_end_ms: Math.max(0, Date.now() - (act.receivedAt ?? act.enqueuedAt ?? startedAt)),
+      context_ms: contextMs, context_refreshes: contextRefreshes,
+      model_ms: result?.metrics.modelMs ?? 0, tool_ms: result?.metrics.toolMs ?? 0,
+      model_calls: result?.metrics.modelCalls ?? 0, tool_calls: result?.metrics.toolCalls ?? 0,
+      decision: result?.decision ?? "none", published_message: postedMessage, acted: sentAnything });
   }
 }

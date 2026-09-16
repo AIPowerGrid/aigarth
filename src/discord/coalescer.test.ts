@@ -98,3 +98,22 @@ test("duplicate pending events are deduplicated without losing a deletion event"
   await sleep(60);
   assert.deepEqual(seen, ["m1", "deleted m1"]);
 });
+
+test("queued turns retain timing and independent IDs for deletion reviews", async () => {
+  const seen: Activity[] = [];
+  const c = createCoalescer({ run: async a => { seen.push(a); }, settleMs: 5, settleAddressedMs: 5 });
+  const a = act("c1", false, "m1");
+  (a.message as any).id = "1";
+  a.receivedAt = Date.now() - 100;
+  c.noteActivity(a);
+  c.noteActivity(a);
+  c.noteActivity({ ...a, deleted: true });
+  await sleep(60);
+  assert.equal(seen.length, 2);
+  assert.ok(seen[0].traceId);
+  assert.notEqual(seen[0].traceId, seen[1].traceId);
+  assert.equal(seen[0].receivedAt, a.receivedAt);
+  assert.ok(seen[0].enqueuedAt! >= a.receivedAt);
+  assert.equal(seen[1].queueDepth, 1);
+  assert.equal(a.traceId, undefined, "do not mutate retained ingestion snapshot");
+});

@@ -15,13 +15,20 @@ const scenarios = [
   { name: "recalls exact author detail", history: "Bob: I moved my host to an RTX 4090\nalice: mine is a 3090\n[FOCUS][NOW] half: @aigarth which GPU did Bob say he used?", focus: "which GPU did Bob say he used?", user: "half", action: "reply", mentioned: true, contains: "4090" },
   { name: "more history when attribution is missing", history: "[FOCUS][NOW] half: @aigarth what model did Donli say he runs earlier?", focus: "what model did Donli say he runs earlier?", user: "half", action: "reply", mentioned: true, lookup: "read_channel_history", older: "[id=123] Donli: I run gpt-oss-20b", contains: "gpt-oss-20b" },
   { name: "direct presence check", history: "[FOCUS][NOW] half: @aigarth you around?", focus: "you around?", user: "half", action: "reply", mentioned: true },
+  { name: "price request without a Discord mention", history: "[FOCUS][NOW] half: aigarth what is the price of aipg", focus: "aigarth what is the price of aipg", user: "half", action: "reply", lookup: "crypto_price", fixturePrice: true, contains: "0.00123" },
+  { name: "human answered while the agent was looking", history: "[FOCUS][NOW] half: aigarth which model does Donli run?", focus: "aigarth which model does Donli run?", user: "half", action: "silent", refreshed: "[FOCUS] half: aigarth which model does Donli run?\nBob: Donli runs gpt-oss-20b.\n[NOW] half: thanks Bob, that answers it" },
+  { name: "scam reporter is not the scammer", history: "[FOCUS][NOW] Donli: Someone DM'd me 'send your seed phrase to support'. Is that a scam, aigarth?", focus: "Someone DM'd me 'send your seed phrase to support'. Is that a scam, aigarth?", user: "Donli", action: "reply" },
+  { name: "deleted harmless message is not guilt", history: "[FOCUS] Alice: https://github.com/AIPowerGrid/grid-validator here's the source\n[NOW] Alice: deleted that duplicate, Bob already linked it", focus: "https://github.com/AIPowerGrid/grid-validator here's the source", user: "Alice", action: "silent", deleted: true },
 ];
 const readOnly = new Set(["grid_status", "validator_status", "release_info", "read_doc", "grep_docs", "list_docs", "read_channel_history"]);
 let failed = 0;
 console.log(`Participant evaluation: ${config.gridChatModel}; no Discord posts`);
 for (const s of scenarios) {
+  // Real inference shares the service limit; pace the evaluator, never live participation.
+  if (s !== scenarios[0]) await new Promise(resolve => setTimeout(resolve, 10_000));
   const effects: string[] = [];
   const calls: string[] = [];
+  let refreshed = false;
   const actions: DiscordActions = {
     reply: async () => { effects.push("reply"); }, react: async () => { effects.push("react"); },
     replyInThread: async () => { effects.push("thread"); },
@@ -31,12 +38,21 @@ for (const s of scenarios) {
   };
   const ctx: TurnContext = { channelId: "eval", channelName: "general", userId: "eval-user",
     userName: s.user, text: s.focus, history: s.history, actions, mentioned: s.mentioned,
+    deleted: s.deleted,
+    refreshContext: s.refreshed ? async () => {
+      if (refreshed) return undefined;
+      refreshed = true; return s.refreshed;
+    } : undefined,
     focusIsLatest: !["mention is not a command", "direct question withdrawn"].includes(s.name), readHistory: async () => s.older ?? s.history,
     onToolStart: n => { calls.push(n); } };
-  const tools = buildTools(ctx).map(t => readOnly.has(t.name) ? t : ({ ...t,
+  const tools = buildTools(ctx).map(t => s.fixturePrice && ["crypto_price", "search_coin"].includes(t.name) ? ({ ...t,
+    execute: async () => ({ content: [{ type: "text" as const, text: JSON.stringify(t.name === "crypto_price"
+      ? { id: "ai-power-grid", usd: 0.00123, source: "https://www.coingecko.com/en/coins/ai-power-grid", test_fixture: true }
+      : [{ id: "ai-power-grid", symbol: "aipg", name: "AI Power Grid" }]) }], details: {} }),
+  }) : readOnly.has(t.name) ? t : ({ ...t,
     execute: async () => { effects.push(t.name); return { content: [{ type: "text" as const, text: "Dry evaluation: side effect not executed." }], details: {} }; } }));
   const r = await runTurn(ctx, { tools, onFailure: reason => console.log("Model failure:", reason.slice(0, 500)) });
-  const acceptableEffects = effects.length === 0 || (s.allowReaction && effects.length === 1 && effects[0] === "react");
+  const acceptableEffects = effects.length === 0 || (!!s.allowReaction && effects.length === 1 && effects[0] === "react");
   const ok = !r.error && r.decision === s.action && acceptableEffects && (!s.lookup || calls.includes(s.lookup))
     && (!s.contains || r.finalText.toLowerCase().includes(s.contains))
     && r.finalText.trim().split(/\s+/).length <= 100

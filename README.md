@@ -45,6 +45,8 @@ used for background context maintenance, not participation decisions.
 No separate retrieval service is needed for curated markdown docs. Update
 `docs/operating-brief.md` with durable operational changes, never live counts or
 secret configuration. It is loaded each turn and treated as historical orientation.
+It carries a review date and is marked stale after 48 hours; live lookups remain
+necessary even when the brief is fresh.
 
 Privacy controls: `!memory`, `!memory on|off`, `!forget <phrase|all>`.
 Permissions, human voting, deduplication and output rate limits remain mechanical.
@@ -67,6 +69,9 @@ not names, account age or keyword rules. Empty voter-role configuration keeps
 community voting disabled while moderator actions continue working.
 This deliberately trusts Members-role holders: multiple accounts with that role
 can collude. Distinct Discord user IDs are not proof of distinct people.
+The bot itself still needs Ban Members and a role above the target. Startup fetches
+fresh permission/role state and logs `moderation readiness`; per-target checks remain
+mandatory. A vote passing is not proof a ban succeeded.
 
 Manual bans close matching cases automatically. Deleting a source message preserves
 a ban proposal and its redacted evidence. Repeated reports attach to one active case
@@ -91,3 +96,22 @@ The participant evaluation uses real Grid inference with production prompts and
 tool schemas. Discord actions and generation are stubbed; it never posts to a
 channel. Its conversation fixtures include human-directed instructions, someone
 else's thanks, direct questions and validator errors requiring live evidence.
+It also covers a price question without a mention, an answer arriving mid-turn,
+scam reporters, and benign deletions. Requests are paced in this evaluator to
+avoid exhausting the shared service limit; live participation is not throttled
+by that test pacing.
+
+## Diagnose A Turn
+
+Read both stdout and stderr. JSON events share `turn_id`, `message_id`, and
+`channel_id`: `turn queued`, `turn started`, context/model/tool events, then one
+`turn finished`. Outcomes are `replied`, `silent`, `acted`, `failed`, or
+`superseded`. Silent means an explicit model decision, not a swallowed error.
+
+`queue_ms` measures waiting; `end_to_end_ms` includes ingestion and queue time.
+`model_ms` includes model request/stream latency, not just GPU execution.
+`tool_ms` includes finish-time context reads, so it overlaps `context_ms`; do not
+sum all timing fields. Context source, messages after focus and refresh counts
+help explain stale work. Partial effects are separately recorded even on failure.
+Raw messages, tool arguments and private reasoning are not included in turn traces.
+The process supervisor must retain and rotate both output streams.

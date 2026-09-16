@@ -15,6 +15,8 @@ runtime knowledge source, so stale claims become incorrect bot answers.
 - `src/docs/store.ts` owns discovery, reads, and admin save/delete behavior.
 - `operating-brief.md` is bounded orientation injected into every agent turn.
   Include review date and canonical sources; label it historical, not live status.
+  Keep under 4,000 characters and use `Reviewed: YYYY-MM-DD UTC` at the start.
+  Missing/future review dates or age of 48 hours mark the injected snapshot stale.
 
 ## Local Contracts
 
@@ -42,6 +44,9 @@ runtime knowledge source, so stale claims become incorrect bot answers.
   staking, validators, or repository names change.
 - Test factual endpoint examples against `grid-core/grid_api/routers` or the
   safe public API before adding them.
+- On releases, incidents or capability changes, verify authoritative sources,
+  update the brief and review date, and deploy the doc with the agent. Do not
+  refresh the date alone or turn a reported symptom into a proven diagnosis.
 
 ## Verification
 

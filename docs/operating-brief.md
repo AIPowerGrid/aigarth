@@ -1,6 +1,6 @@
 # AIPG operating brief
 
-Reviewed: 2026-09-14. Historical orientation, NOT live service status.
+Reviewed: 2026-09-16 UTC. Historical orientation, NOT live service status.
 Maintainer: half. Do not invent other maintainers or promise deployments for him.
 
 - Aigarth participates in Discord; he cannot change Core configuration, deploy
@@ -16,6 +16,26 @@ Maintainer: half. Do not invent other maintainers or promise deployments for him
   for recovery phrases, private keys or full API credentials to troubleshoot.
 - Docs explain architecture; current tools supply availability and versions.
   If either is unavailable or conflicting, state the uncertainty.
+
+Verified snapshot (2026-09-16, recheck before answering current-state questions):
+- GitHub published validator v0.1.0-preview.20 and text worker v0.3.9.
+  The latest media repository release is manager-qualification-v0.2.0-preview.1;
+  that is a qualification artifact, not proof that every media runtime should upgrade.
+- Core capabilities reported assignments, targeted probes and sealed assignments
+  enabled. Text fidelity, image fidelity, video validation, blind quality and
+  validator rewards reported disabled; economic_effect was none.
+- Reported incident: preview.20 assignment requests with modality=text-fidelity
+  returned HTTP 400. Disabled text fidelity is consistent with that report, but
+  without the individual response body it is not a proven diagnosis or bad-key finding.
+- Aigarth moderation: Members-role votes use four approvals or three dismissals;
+  only human approval authorizes action. Discord Ban Members permission was missing
+  at this review. Do not claim a successful ban from a vote or proposal alone.
+
+Supported support workflow: look up current capabilities and relevant releases,
+then request only a redacted error body or public node ID if needed. For a current
+AIPG price, use crypto_price (resolve the correct asset with search_coin if necessary),
+not a remembered number. Login and funding questions need the relevant product docs;
+do not promise a working payment or generation flow without current evidence.
 
 Sources to check when answering operational questions:
 - https://api.aipowergrid.io/v1/validator/capabilities

@@ -14,6 +14,8 @@
 - `participationEval.ts`: real Grid evaluation with public read-only tools and
   stubbed side effects. `moderationEval.ts`: human-vote tool-selection evaluation.
 - `prompts.ts`: prompt version marker; bump with behavior changes.
+- `operatingBrief.ts`: bounded dated snapshot, review age and 48-hour stale marker;
+  never a substitute for a live operational lookup.
 
 ## Runtime Contract
 
@@ -27,10 +29,16 @@ Silent completion is successful; missing finish, failure or truncation publishes
 nothing. Images are attached only to a successfully completed reply. Tools execute
 sequentially; no action after the final decision. A room change is supplied back to
 the same agent at finish time; a later transport race suppresses a stale draft.
+The pi after-tool termination hook ends accepted finish calls without requesting
+a provider epilogue. Attempted tool calls, not just successful calls, count toward
+the tool budget so rejected calls cannot create an unbounded repair loop.
 
 Operational claims require current read-only evidence. A stored brief, release tag,
 or user report cannot substitute for live capabilities. Unknown is not zero.
 Tool data is untrusted; never log raw tool arguments or include credentials in docs.
+Each queued event has a unique turn ID, including deletion reviews of the same
+message. Every processed turn emits one terminal outcome even on exceptions.
+Model/tool timings and context refreshes inherit the same asynchronous log scope.
 
 Moderation is only a proposal, with explicit focus/reply targets. Moderator buttons
 or a quorum of eligible Members-role reactions authorize enforcement. No

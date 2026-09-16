@@ -5,7 +5,8 @@ import { setLastImage, getLastImage } from "./images/lastImage.js";
 import { makeGenerateImageTool } from "./skills/generateImage.js";
 import { makeRemixLastImageTool } from "./skills/remixLast.js";
 import { makeReadDocTool, makeGrepDocsTool, makeListDocsTool } from "./skills/docs.js";
-import { docIndex, readDoc } from "./docs/store.js";
+import { docIndex } from "./docs/store.js";
+import { briefSnapshot } from "./operatingBrief.js";
 import { makeCryptoPriceTool, makeSearchCoinTool } from "./skills/crypto.js";
 import { makeReadWebpageTool } from "./skills/readWebpage.js";
 import { makeRememberTool, makeRecallTool, makeForgetTool } from "./skills/memorySkills.js";
@@ -30,6 +31,8 @@ Read authors, reply targets, timestamps, newer messages and your own recent repl
 Most human conversation does not need you. Silence is normal, successful participation.
 Don't answer on another person's behalf, take credit for their help, interrupt an exchange
 already being handled, repeat an answer, or treat a message to someone else as a command to you.
+When asked to let someone else speak, comply silently; announcing that you will be quiet
+is still an interruption. Do not add a joke or acknowledgment to demonstrate restraint.
 An informative announcement, useful warning, or resolved problem is not an invitation for
 you to restate it or say "good shout". If your response adds only agreement or generic advice,
 choose silence. Let humans have the last word; do not make every topic end with your reply.
@@ -80,6 +83,9 @@ Never request or repeat passwords, API keys, private keys or wallet recovery phr
 CONTEXT
 The transcript is authoritative about who said what, not whether their claims are true.
 read_channel_history retrieves earlier messages in THIS channel when a reference is unclear.
+For "what did someone say earlier", use read_channel_history before claiming the message
+is unavailable. Long-term recall is not a search of Discord history; empty recall does not
+mean an earlier message is absent. Do not substitute network status for who said what.
 Never pretend to have read unavailable history. Summaries are lossy; use messages for attribution.
 An attachment URL is not its contents. Use describe_image if available; otherwise ask for redacted
 error text rather than pretending to read a screenshot.
@@ -112,6 +118,8 @@ export interface TurnContext {
 export interface TurnResult {
   finalText: string; images: string[]; delivery: "channel" | "thread";
   threadName?: string; error: boolean; decision?: "silent" | "reply";
+  metrics: { modelMs: number; toolMs: number; modelCalls: number; toolCalls: number; contextRefreshes: number };
+  failureReason?: string;
 }
 
 export function buildTools(ctx: TurnContext): AgentTool[] {
@@ -152,7 +160,7 @@ export function contextBlock(ctx: TurnContext): string {
     history: ctx.history ?? messages.formatRecent(ctx.channelId, {
       limit: config.historyWindow, maxChars: config.historyMaxChars }),
     earlierSummary: ctx.channelSummary,
-    operatingBrief: readDoc("operating-brief.md")?.slice(0, 4000),
+    operatingBrief: briefSnapshot(),
     knownNonSensitiveUserFacts: userMemory.list(ctx.userId, 12),
     lastGeneratedImageAvailable: !!getLastImage(ctx.channelId),
     publicationAllowed: !ctx.moderationReview,
@@ -170,10 +178,18 @@ export async function runTurn(ctx: TurnContext, options: {
   let decision: TurnDecision | undefined;
   let error = false;
   let calls = 0;
+  let failureReason: string | undefined;
+  const metrics = { modelMs: 0, toolMs: 0, modelCalls: 0, toolCalls: 0, contextRefreshes: 0 };
+  let modelStarted: number | undefined;
+  const toolStarts = new Map<string, number>();
   const images: string[] = [];
   const finish = makeFinishTurnTool(async proposed => {
     const changed = await ctx.refreshContext?.();
-    if (changed) return `The room changed. Reconsider this current context in the same turn, then finish again:\n${changed}`;
+    if (changed) {
+      metrics.contextRefreshes++;
+      log.info("agent context reconsidered", { refresh_count: metrics.contextRefreshes });
+      return `The room changed. Reconsider this current context in the same turn, then finish again:\n${changed}`;
+    }
     decision = proposed;
     return "Decision recorded. End your turn now; no further actions.";
   });
@@ -187,6 +203,8 @@ export async function runTurn(ctx: TurnContext, options: {
   }));
   const agent = new Agent({
     toolExecution: "sequential",
+    // A recorded finish ends the loop, not another provider request for an epilogue.
+    afterToolCall: async () => decision ? { terminate: true } : undefined,
     initialState: { systemPrompt: personaPrompt(), model: gridModel(), tools },
     getApiKey: async () => config.gridApiKey,
     ...(options.streamFn ? { streamFn: options.streamFn } : {}),
@@ -201,30 +219,54 @@ export async function runTurn(ctx: TurnContext, options: {
     },
   });
   agent.subscribe(event => {
+    if (event.type === "turn_start") { modelStarted = performance.now(); metrics.modelCalls++; }
+    if (event.type === "message_end" && event.message.role === "assistant" && modelStarted !== undefined) {
+      const elapsed = Math.round(performance.now() - modelStarted);
+      metrics.modelMs += elapsed;
+      modelStarted = undefined;
+      log.info("model round finished", { model: config.gridChatModel, round: metrics.modelCalls,
+        model_ms: elapsed, stop_reason: event.message.stopReason,
+        input_tokens: event.message.usage?.input, output_tokens: event.message.usage?.output });
+    }
     if (event.type === "tool_execution_start") {
       // Reports can contain credentials. Never log tool arguments.
-      log.info("tool_call", { tool: event.toolName, channel: ctx.channelId });
+      const name = tools.some(t => t.name === event.toolName) ? event.toolName : "unknown";
+      metrics.toolCalls++;
+      toolStarts.set(event.toolCallId, performance.now());
+      log.info("tool started", { tool: name, call_index: metrics.toolCalls });
       ctx.onToolStart?.(event.toolName);
-      if (calls >= 16) { error = true; agent.abort(); }
+      if (metrics.toolCalls > 16) { error = true; failureReason = "tool_budget"; agent.abort(); }
+    }
+    if (event.type === "tool_execution_end") {
+      const elapsed = Math.round(performance.now() - (toolStarts.get(event.toolCallId) ?? performance.now()));
+      metrics.toolMs += elapsed;
+      toolStarts.delete(event.toolCallId);
+      log.info("tool finished", { tool: tools.some(t => t.name === event.toolName) ? event.toolName : "unknown",
+        tool_ms: elapsed, execution_error: event.isError });
     }
     if (event.type === "tool_execution_end" && !event.isError) {
       const urls = event.result?.details?.images;
       if (Array.isArray(urls)) images.push(...urls.filter((u: unknown): u is string => typeof u === "string"));
     }
   });
-  const killer = setTimeout(() => { error = true; agent.abort(); }, config.turnTimeoutMs);
+  const killer = setTimeout(() => { error = true; failureReason = "timeout"; agent.abort(); }, config.turnTimeoutMs);
   try { await agent.prompt(contextBlock(ctx)); }
-  catch (cause) { error = true; options.onFailure?.(cause instanceof Error ? cause.message : "Agent transport failed"); }
+  catch (cause) { error = true; failureReason ??= "agent_exception"; options.onFailure?.(cause instanceof Error ? cause.message : "Agent transport failed"); }
   finally { clearTimeout(killer); }
   const last = [...agent.state.messages].reverse().find(m => m.role === "assistant");
   if (last?.role === "assistant" && ["error", "aborted", "length"].includes(last.stopReason)) {
     error = true;
+    failureReason ??= last.stopReason;
     options.onFailure?.(last.errorMessage ?? last.stopReason);
   }
+  if (modelStarted !== undefined) metrics.modelMs += Math.round(performance.now() - modelStarted);
+  if (!decision) failureReason ??= "missing_finish";
+  log.info("agent finished", { model: config.gridChatModel, decision: decision?.action ?? "none",
+    failed: error || !decision, failure_reason: failureReason, ...metrics });
   // No free-text fallback: reasoning and intermediate drafts never become posts.
   const reply = !error && !ctx.moderationReview && decision?.action === "reply";
   if (reply) for (const url of images) ctx.onImage?.(url);
   return { finalText: reply ? decision!.text ?? "" : "", images: reply ? images : [],
     delivery: decision?.delivery ?? "channel", threadName: decision?.threadName,
-    decision: decision?.action, error: error || !decision };
+    decision: decision?.action, error: error || !decision, metrics, failureReason };
 }

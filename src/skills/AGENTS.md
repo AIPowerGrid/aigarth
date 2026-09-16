@@ -45,6 +45,8 @@ registers them per turn.
   (`store/db.ts` `userMemory`, keyed to the current speaker and surfaced next time) and
   also hindsight if configured; `recall` searches hindsight.
   `remember` must honor per-user memory preference before writing either backend.
+  `recall` is saved semantic memory, not a Discord transcript search. Use
+  `read_channel_history` for exact attribution of earlier channel messages.
 - `react.ts` — `react`: emoji-react via the discord-supplied `DiscordActions.react` callback.
 
 ## Local Contracts
