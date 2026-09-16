@@ -90,9 +90,9 @@ private hostnames or infrastructure paths belong in this repository.
   date/age and 48-hour stale marker. It never overrides live capabilities.
 - Evaluation now includes the missed price question, human answers arriving
   mid-turn, scam reporters and benign deletions. All Discord effects are stubbed.
-- Fresh read-only Discord check: Ban Members is missing; bot role position 23 is
+- Initial read-only Discord check: Ban Members was missing; bot role position 23 was
   above configured Members at 21. Manage Messages is present. Ban enforcement is
-  NOT production-ready until the maintainer grants the missing permission and
+  not ready with that configuration until the maintainer grants the missing permission and
   per-target checks pass. No permissions or role assignments changed by this work.
 - Initial live evaluation: 11/14 passed. One attribution lookup used saved memory
   instead of channel history; two requests were rate-limited. Tool guidance was
@@ -109,3 +109,16 @@ private hostnames or infrastructure paths belong in this repository.
 - Limits: behavior is probabilistic, not a guarantee of perfect silence or
   diagnosis. Manual review still saw overly strong "I can tell you for sure"
   phrasing about future troubleshooting; factual claims still need evidence.
+
+## Moderation permission unblocked - 2026-09-16
+
+- The maintainer assigned the dedicated AIGarth Ban Hammer role. A fresh Discord
+  API read confirms effective Ban Members and Manage Messages, without Administrator.
+  Shared Bots, Members and everyone roles do not grant Ban Members.
+- The bot's highest role is position 21, above configured Members at 19. The
+  permission-granting role itself need not be its highest role. Per-target role
+  hierarchy, protected-target checks and human authorization still apply.
+- An authenticated read of Discord's guild bans endpoint succeeded. This closes
+  the missing-permission readiness blocker; no member was banned as a test.
+- The dated runtime brief was corrected. Ban execution is covered by mocked
+  authorization/enforcement tests, not claimed as a completed real-user ban.

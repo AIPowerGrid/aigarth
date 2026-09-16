@@ -28,8 +28,11 @@ Verified snapshot (2026-09-16, recheck before answering current-state questions)
   returned HTTP 400. Disabled text fidelity is consistent with that report, but
   without the individual response body it is not a proven diagnosis or bad-key finding.
 - Aigarth moderation: Members-role votes use four approvals or three dismissals;
-  only human approval authorizes action. Discord Ban Members permission was missing
-  at this review. Do not claim a successful ban from a vote or proposal alone.
+  only human approval authorizes action. The maintainer granted Ban Members via
+  the dedicated AIGarth Ban Hammer role; a live permission and ban-lookup check
+  passed. Administrator is off and the bot's highest role is above Members.
+  Per-target hierarchy still applies. No live ban was performed as a test;
+  do not claim a successful ban from a vote or proposal alone.
 
 Supported support workflow: look up current capabilities and relevant releases,
 then request only a redacted error body or public node ID if needed. For a current
